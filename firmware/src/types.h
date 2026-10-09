@@ -22,7 +22,7 @@ struct __attribute__((packed)) AutoParams {   // 12 bytes
   uint16_t durationMin;  // minutes, 0..120 (0 = no limit)
 };
 
-struct __attribute__((packed)) Status {       // 11 bytes
+struct __attribute__((packed)) Status {       // 12 bytes
   uint8_t  mode;         // Mode
   uint8_t  flags;        // bit0: pot feedback valid, bit1: stopped because the motor stalled, bit2: calibrating
   uint16_t vbatMv;
@@ -30,6 +30,7 @@ struct __attribute__((packed)) Status {       // 11 bytes
   uint16_t targetDeg10;  // commanded position, 0.1 deg
   uint16_t remainingS;   // auto: seconds until Off (0xFFFF = no limit); manual: until timeout
   uint8_t  slot;         // active auto slot, 0..3
+  uint8_t  pending;      // requested mode waiting for the stroke to end: mode | slot << 4; 0xFF = none
 };
 
 // Pot feedback calibration: pot voltage at CAL_POINTS evenly spaced angles
@@ -42,6 +43,15 @@ struct __attribute__((packed)) PotCal {
   uint16_t maxSpeedDps;      // slowest direction, 10%..90% of a full-range move
   uint16_t noiseMv;          // peak-to-peak reading while holding still
 };
+
+// Manual mode: how the arm travels to each slider position.
+struct __attribute__((packed)) ManualParams {   // 6 bytes
+  uint8_t  profile;      // Profile
+  uint8_t  reserved;
+  uint16_t speed;        // deg/s
+  uint16_t accel;        // deg/s^2
+};
+constexpr ManualParams MANUAL_DEFAULTS = {PROFILE_SINUSOIDAL, 0, 90, 300};
 
 constexpr AutoParams AUTO_DEFAULTS = {PROFILE_SINUSOIDAL, 0, 90, 300, 60, 5, 30};
 

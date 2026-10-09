@@ -40,8 +40,8 @@ constexpr uint32_t STALL_TIME_MS        = 500;
 constexpr uint32_t SERVO_SETTLE_MS     = 150;
 // Auto's first move, from wherever the arm is to the first end of the swing,
 // is capped to these so it eases in instead of racing.
-constexpr uint16_t APPROACH_SPEED_DPS  = 40;
-constexpr uint16_t APPROACH_ACCEL_DPS2 = 80;
+constexpr uint16_t APPROACH_SPEED_DPS  = 60;
+constexpr uint16_t APPROACH_ACCEL_DPS2 = 200;
 
 // ---------------------------------------------------------------- timing
 constexpr uint32_t CONTROL_PERIOD_MS  = 20;        // 50 Hz, same as the servo frame
@@ -57,3 +57,4 @@ constexpr uint32_t STATUS_PERIOD_MS   = 500;
 #define BLE_STATUS_UUID   "8f1d0005-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
 #define BLE_CMD_UUID      "8f1d0006-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
 #define BLE_STATS_UUID    "8f1d0008-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
+#define BLE_MANUAL_UUID   "8f1d0009-5b7a-4c2e-9d3b-6a1f2e3c4b5a"

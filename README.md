@@ -38,6 +38,17 @@ apply live; **Save to Auto N** (bottom of the panel, highlighted when there are 
 changes) stores them into that button. The app speaks English and Hebrew (right-to-left);
 the choice is remembered per phone.
 
+The mode buttons show what the **device** reports, never a guess. A mode change asked for
+while the arm is moving waits until the current stroke ends (so nothing jerks): the requested
+button gets a pulsing outline and a "switching when the stroke ends" note until then. A stall
+is the only thing that stops at once.
+
+**Manual** has its own movement profile, speed and acceleration (stored on the device): from
+rest the arm makes a planned move to the slider position; while the slider is being dragged
+it follows with a speed/acceleration-limited tracker that keeps its current velocity.
+
+Sliders only move when the drag starts on the knob, so scrolling past them is safe.
+
 Long presses (with a confirmation):
 - **Position** box → calibrate the motor (see below).
 - A **Statistics** box (last 24 h / last 30 days / all time) → reset that one.
@@ -122,7 +133,8 @@ pio run -t upload
 pio device monitor
 ```
 Serial commands: `off`, `man` (enter Manual where the arm is), `man <deg>`, `auto [1-4]`,
-`set <profile> <speed> <accel> <travel> <hold×0.1s> <min>`, `save`, `cal`, `calinfo`,
+`set <profile> <speed> <accel> <travel> <hold×0.1s> <min>`, `mset <profile> <speed> <accel>` (Manual),
+`save`, `cal`, `calinfo`,
 `stats`, `stats reset <0|1|2>`, `time <epoch>`, `status`.
 
 ### BLE protocol
@@ -131,10 +143,11 @@ Service `8f1d0001-5b7a-4c2e-9d3b-6a1f2e3c4b5a`, all little-endian:
 
 | Char | UUID suffix | Props | Payload |
 |---|---|---|---|
-| Mode | `…0002` | R/W/N | u8: 0 Off, 1 Manual, 2 Auto; for Auto a 2nd byte picks the button 0-3 |
+| Mode | `…0002` | R/W/W-no-rsp/N | u8: 0 Off, 1 Manual, 2 Auto; for Auto a 2nd byte picks the button 0-3. Applies when the arm is at rest |
 | Position | `…0003` | W / W-no-rsp | u16 angle ×10 (switches to Manual) |
+| Manual params | `…0009` | R/W | u8 profile, u8 0, u16 speed, u16 accel (saved 2 s after the last change) |
 | Auto params | `…0004` | R/W | active set (live, not saved): u8 profile, u8 0, u16 speed, u16 accel, u16 travel, u16 hold×10, u16 duration min |
-| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback, bit1 = stopped by a stall, bit2 = calibrating), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3 |
+| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback, bit1 = stopped by a stall, bit2 = calibrating), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3, u8 pending mode (mode \| button << 4, 0xFF = none) |
 | Command | `…0006` | W | u8 command + args: `01` calibrate, `02` save the active set into the active Auto button, `03 w` reset stats (w: 0 = 24 h, 1 = 30 days, 2 = all time), `04 t0..t3` set time (u32 epoch s) |
 | Stats | `…0008` | R/N | 6 × u32: 24 h count, 24 h seconds, 30 d count, 30 d seconds, all-time count, all-time seconds (0xFFFFFFFF = time not known yet) |
 

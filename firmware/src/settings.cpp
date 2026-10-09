@@ -59,6 +59,15 @@ PotCal loadPotCal() {
 
 void savePotCal(const PotCal &c) { s_prefs.putBytes("potcal", &c, sizeof(c)); }
 
+ManualParams loadManual() {
+  ManualParams p = MANUAL_DEFAULTS;
+  if (s_prefs.isKey("manual") && s_prefs.getBytesLength("manual") == sizeof(p))
+    s_prefs.getBytes("manual", &p, sizeof(p));
+  return p;
+}
+
+void saveManual(const ManualParams &p) { s_prefs.putBytes("manual", &p, sizeof(p)); }
+
 // Where the arm was when the servo was last switched off: the first PWM pulse
 // after power-up goes there, so a reboot doesn't make the arm jump.
 float loadLastPos(float fallback) { return s_prefs.isKey("lastpos") ? s_prefs.getFloat("lastpos", fallback) : fallback; }

@@ -24,17 +24,20 @@ struct Inbox {
   uint16_t   posDeg10 = 0;
   bool       hasAuto = false;
   AutoParams autoParams{};
+  bool       hasManual = false;
+  ManualParams manualParams{};
   uint8_t    cmd = CMD_NONE;
   uint8_t    cmdArgs[4] = {};
 };
 
-void        begin(const AutoParams &initial);
+void        begin(const AutoParams &autoInitial, const ManualParams &manualInitial);
 void        poll();                  // call from loop(): keeps advertising, drops stale links
 const char *deviceName();
 bool        connected();
 bool        takeInbox(Inbox &out);   // true if anything arrived
 void        publishMode(uint8_t mode);
 void        publishAuto(const AutoParams &p);
+void        publishManual(const ManualParams &p);
 void        publishStatus(const Status &s);
 void        publishStats(const stats::Summary &s);
 

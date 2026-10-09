@@ -49,6 +49,25 @@
         <span><span data-i18n="posLabel">Position (degrees):</span> <b id="posVal">135</b></span>
         <input id="pos" type="range" min="0" max="270" step="1" value="135">
       </label>
+      <div id="manualMotion" class="sub-fields">
+        <label class="field">
+          <span data-i18n="profile">Movement Profile:</span>
+          <select id="mProfile">
+            <option value="0" data-i18n="trapezoidal">Trapezoidal</option>
+            <option value="1" data-i18n="scurve">S-Curve</option>
+            <option value="2" data-i18n="sinusoidal">Sinusoidal</option>
+            <option value="3" data-i18n="cubical">Cubical</option>
+          </select>
+        </label>
+        <label class="slider">
+          <span><span data-i18n="speed">Speed (degrees/sec):</span> <b id="mSpeedVal"></b></span>
+          <input id="mSpeed" type="range" min="5" max="360" step="1">
+        </label>
+        <label class="slider">
+          <span><span data-i18n="accel">Acceleration (degrees/sec²):</span> <b id="mAccelVal"></b></span>
+          <input id="mAccel" type="range" min="10" max="1000" step="5">
+        </label>
+      </div>
       <p class="hint" data-i18n="manualHint">Returns to Off after 1 minute without movement.</p>
     </section>
 

@@ -55,18 +55,18 @@ float Motion::update(uint32_t nowMs) {
   return m_pos;
 }
 
-Motion::Segment Motion::plan(float from, float to, const AutoParams &p) {
+Motion::Segment Motion::plan(float from, float to, uint8_t profile, float speed, float accel) {
   Segment s;
   s.from = from;
   s.dir = to >= from ? 1 : -1;
   s.dist = fabsf(to - from);
-  s.profile = p.profile;
-  const float V = p.speed, A = p.accel, D = s.dist;
+  s.profile = profile;
+  const float V = speed, A = accel, D = s.dist;
   if (D < 0.01f || V <= 0 || A <= 0) {
     s.T = 0;
     return s;
   }
-  switch (p.profile) {
+  switch (profile) {
     case PROFILE_SINUSOIDAL:
       // x = D(1-cos(pi t/T))/2 : vmax = pi D / 2T, amax = pi^2 D / 2T^2
       s.T = fmaxf(M_PI * D / (2 * V), M_PI * sqrtf(D / (2 * A)));
@@ -80,7 +80,7 @@ Motion::Segment Motion::plan(float from, float to, const AutoParams &p) {
     default: {
       // Ramp time: linear velocity ramp (trapezoid) or smoothstep velocity
       // ramp (S-curve, peak accel 1.5 vp/ta). Both cover vp*ta/2 per ramp.
-      const float k = p.profile == PROFILE_SCURVE ? 1.5f : 1.0f;
+      const float k = profile == PROFILE_SCURVE ? 1.5f : 1.0f;
       s.vp = V;
       s.ta = k * V / A;
       if (s.vp * s.ta > D) {          // never reaches cruise: triangle

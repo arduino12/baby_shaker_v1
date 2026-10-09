@@ -8,7 +8,7 @@
 namespace ble {
 
 static char                 s_name[24];
-static NimBLECharacteristic *s_modeChr, *s_autoChr, *s_statusChr, *s_statsChr;
+static NimBLECharacteristic *s_modeChr, *s_autoChr, *s_statusChr, *s_statsChr, *s_manualChr;
 static NimBLEServer         *s_server;
 static volatile bool        s_connected = false;
 static Inbox                s_inbox;
@@ -44,6 +44,9 @@ class WriteCb : public NimBLECharacteristicCallbacks {
     } else if (uuid == NimBLEUUID(BLE_AUTO_UUID) && v.size() >= sizeof(AutoParams)) {
       s_inbox.hasAuto = true;
       memcpy(&s_inbox.autoParams, v.data(), sizeof(AutoParams));
+    } else if (uuid == NimBLEUUID(BLE_MANUAL_UUID) && v.size() >= sizeof(ManualParams)) {
+      s_inbox.hasManual = true;
+      memcpy(&s_inbox.manualParams, v.data(), sizeof(ManualParams));
     } else if (uuid == NimBLEUUID(BLE_CMD_UUID) && v.size() >= 1) {
       s_inbox.cmd = v[0];
       memset(s_inbox.cmdArgs, 0, sizeof(s_inbox.cmdArgs));
@@ -56,7 +59,7 @@ class WriteCb : public NimBLECharacteristicCallbacks {
 static ServerCb s_serverCb;
 static WriteCb  s_writeCb;
 
-void begin(const AutoParams &initial) {
+void begin(const AutoParams &initial, const ManualParams &manualInitial) {
   // "Baby Shaker XXXX" from the last two bytes of the factory MAC.
   const uint64_t mac = ESP.getEfuseMac();   // byte 0 of the MAC is the LSB here
   const uint8_t b4 = (mac >> 32) & 0xFF, b5 = (mac >> 40) & 0xFF;
@@ -69,7 +72,7 @@ void begin(const AutoParams &initial) {
 
   NimBLEService *svc = srv->createService(BLE_SVC_UUID);
   s_modeChr = svc->createCharacteristic(BLE_MODE_UUID,
-      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY);
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic *pos = svc->createCharacteristic(BLE_POS_UUID,
       NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   s_autoChr = svc->createCharacteristic(BLE_AUTO_UUID,
@@ -78,10 +81,12 @@ void begin(const AutoParams &initial) {
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic *cmd = svc->createCharacteristic(BLE_CMD_UUID, NIMBLE_PROPERTY::WRITE);
   s_statsChr = svc->createCharacteristic(BLE_STATS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  s_manualChr = svc->createCharacteristic(BLE_MANUAL_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
 
-  for (NimBLECharacteristic *c : {s_modeChr, pos, s_autoChr, cmd}) c->setCallbacks(&s_writeCb);
+  for (NimBLECharacteristic *c : {s_modeChr, pos, s_autoChr, cmd, s_manualChr}) c->setCallbacks(&s_writeCb);
   s_modeChr->setValue((uint8_t)MODE_OFF);
   s_autoChr->setValue((const uint8_t *)&initial, sizeof(initial));
+  s_manualChr->setValue((const uint8_t *)&manualInitial, sizeof(manualInitial));
 
   // Name in the advertisement (the app filters on it), 128-bit service UUID
   // in the scan response - both won't fit in 31 bytes together.
@@ -120,7 +125,7 @@ bool takeInbox(Inbox &out) {
   out = s_inbox;
   s_inbox = Inbox{};
   portEXIT_CRITICAL(&s_mux);
-  return out.hasMode || out.hasPos || out.hasAuto || out.cmd != CMD_NONE;
+  return out.hasMode || out.hasPos || out.hasAuto || out.hasManual || out.cmd != CMD_NONE;
 }
 
 void publishMode(uint8_t mode) {
@@ -129,6 +134,8 @@ void publishMode(uint8_t mode) {
 }
 
 void publishAuto(const AutoParams &p) { s_autoChr->setValue((const uint8_t *)&p, sizeof(p)); }
+
+void publishManual(const ManualParams &p) { s_manualChr->setValue((const uint8_t *)&p, sizeof(p)); }
 
 void publishStats(const stats::Summary &s) {
   s_statsChr->setValue((const uint8_t *)&s, sizeof(s));

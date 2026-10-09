@@ -9,6 +9,7 @@ const CHR_AUTO    = '8f1d0004-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_STATUS  = '8f1d0005-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_CMD     = '8f1d0006-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_STATS   = '8f1d0008-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
+const CHR_MANUAL  = '8f1d0009-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const NAME_PREFIX = 'Baby Shaker';
 const MODE_OFF = 0, MODE_MANUAL = 1, MODE_AUTO = 2;
 const CMD_CALIBRATE = 1, CMD_SAVE_SLOT = 2, CMD_RESET_STATS = 3, CMD_SET_TIME = 4;
@@ -36,6 +37,7 @@ const STR = {
     hintSaveFail: 'Save failed: {0}',
     hintStall: 'Motor stalled and was stopped. Check that nothing blocks the arm.',
     hintCalibrating: 'Calibrating the motor - it sweeps its full range (~20 s)…',
+    hintPending: 'Switching to {0} when the current stroke ends…',
     calConfirm: 'Calibrate the motor now? It will sweep its full range for about 20 seconds - make sure nothing blocks the arm.',
     usage: 'Statistics', last24h: 'Last 24 hours', last30d: 'Last 30 days', allTime: 'All time',
     times: '{0} times', dur: '{0}h {1}m', usageHint: 'Long-press a box to reset it.',
@@ -66,6 +68,7 @@ const STR = {
     hintNoBt: 'בדפדפן הזה אין Web Bluetooth. השתמשו ב-Chrome (אנדרואיד / Windows / Mac) או ב-Bluefy (אייפון).',
     hintStall: 'המנוע נתקע ונעצר. ודאו ששום דבר לא חוסם את הזרוע.',
     hintCalibrating: 'מכייל את המנוע - הוא נע על כל הטווח (~20 שניות)…',
+    hintPending: 'עובר ל{0} בסוף התנועה הנוכחית…',
     calConfirm: 'לכייל את המנוע עכשיו? הוא ינוע על כל הטווח כ-20 שניות - ודאו ששום דבר לא חוסם את הזרוע.',
     usage: 'סטטיסטיקה', last24h: '24 שעות אחרונות', last30d: '30 ימים אחרונים', allTime: 'מאז ומתמיד',
     times: '{0} הפעלות', dur: '{0} ש׳ {1} ד׳', usageHint: 'לחיצה ארוכה על תיבה מאפסת אותה.',
@@ -94,15 +97,14 @@ const ui = {
   modeBtns: [...document.querySelectorAll('.modes button')],
 };
 const AUTO_SLIDERS = ['speed', 'accel', 'travel', 'hold', 'duration'];
+const MANUAL_SLIDERS = ['mSpeed', 'mAccel'];
 
 let device = null, chr = {}, userDisconnect = false, draggingPos = false;
 let connState = 'off', hint = null, lastStatus = null;
 let mode = -1, slot = -1;          // as last reported by the device
 let dirty = false;                 // sliders edited since the slot was loaded/saved
 let lastStats = null;
-// Optimistic mode: a pressed button shows at once; the device's status confirms
-// it. Until then (max 1.5 s) older statuses must not flip the display back.
-let localMode = null;              // {m, s, until}
+let pending = null;                // {m, s}: requested, waiting for the stroke to end (device-reported)
 
 // ------------------------------------------------------------ GATT plumbing
 // Chrome rejects overlapping GATT operations, so everything goes through one chain.
@@ -176,15 +178,36 @@ function sendTime() {
   return sendCmd([CMD_SET_TIME, now & 255, (now >> 8) & 255, (now >> 16) & 255, (now >>> 24) & 255]);
 }
 
+// The buttons show only what the device reports (status notification), never
+// a guess. Without-response: no round trip before the device acts on it.
 function sendMode(m, s) {
   if (!chr.mode) return;
-  localMode = { m, s, until: Date.now() + 1500 };
-  showMode(m, s, false);
   const bytes = m === MODE_AUTO ? [m, s] : [m];
-  gatt(() => chr.mode.writeValueWithResponse(new Uint8Array(bytes)))
-    // The device loads the slot's set when it handles the write - read it a bit later.
-    .then(() => { if (m === MODE_AUTO) setTimeout(() => loadAuto().catch(() => {}), 250); })
-    .catch(e => { localMode = null; setHint('hintModeFail', e.message); });
+  gatt(() => chr.mode.writeValueWithoutResponse(new Uint8Array(bytes)))
+    .catch(e => setHint('hintModeFail', e.message));
+}
+
+function encodeManual() {
+  const b = new DataView(new ArrayBuffer(6));
+  b.setUint8(0, +$('mProfile').value);
+  b.setUint16(2, +$('mSpeed').value, true);
+  b.setUint16(4, +$('mAccel').value, true);
+  return new Uint8Array(b.buffer);
+}
+
+function decodeManual(dv) {
+  $('mProfile').value = dv.getUint8(0);
+  $('mSpeed').value = dv.getUint16(2, true);
+  $('mAccel').value = dv.getUint16(4, true);
+  MANUAL_SLIDERS.forEach(updateLabel);
+}
+
+let manualTimer = null;
+function sendManualSoon() {
+  clearTimeout(manualTimer);
+  manualTimer = setTimeout(() => {
+    if (chr.manual) gatt(() => chr.manual.writeValueWithResponse(encodeManual())).catch(e => console.warn('manual write', e));
+  }, 150);
 }
 
 // ------------------------------------------------------------ UI
@@ -209,6 +232,8 @@ function setDirty(d) {
   ui.saveBtn.classList.toggle('primary', d);
 }
 
+const MODE_KEYS = ['off', 'manual', 'auto'];
+
 function fmtTime(s) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
@@ -218,17 +243,20 @@ function updateLabel(id) {
   $(id + 'Val').textContent = id === 'hold' ? v.toFixed(1) : id === 'duration' && v === 0 ? t('noLimit') : v;
 }
 
-function showMode(m, s, fromDevice = true) {
+function showMode(m, s) {
   const changed = m !== mode || (m === MODE_AUTO && s !== slot);
   if (m === MODE_MANUAL && m !== mode) { posPending = null; draggingPos = false; }
   mode = m; slot = s;
-  ui.modeBtns.forEach(b => b.classList.toggle('active',
-    +b.dataset.mode === m && (m !== MODE_AUTO || +b.dataset.slot === s)));
+  const is = (b, mm, ss) => +b.dataset.mode === mm && (mm !== MODE_AUTO || +b.dataset.slot === ss);
+  ui.modeBtns.forEach(b => {
+    b.classList.toggle('active', is(b, m, s));
+    b.classList.toggle('pending', !!pending && is(b, pending.m, pending.s));
+  });
   ui.manualCard.hidden = m !== MODE_MANUAL;
   ui.autoCard.hidden = m !== MODE_AUTO;
   ui.saveBtn.textContent = t('save', s + 1);
-  // Switched to another Auto button elsewhere (another phone, serial): show its set.
-  if (fromDevice && changed && m === MODE_AUTO && connState === 'on') loadAuto().catch(() => {});
+  // Now on another Auto button: show its saved set.
+  if (changed && m === MODE_AUTO && connState === 'on') loadAuto().catch(() => {});
 }
 
 function onStatus(dv) {
@@ -240,13 +268,12 @@ function onStatus(dv) {
   const want = calibrating ? 'hintCalibrating' : stall ? 'hintStall' : null;
   if (want && hint?.key !== want) setHint(want);
   else if (!want && (hint?.key === 'hintStall' || hint?.key === 'hintCalibrating')) setHint(null);
-  const pending = localMode && Date.now() < localMode.until;
-  if (pending && (m !== localMode.m || (m === MODE_AUTO && s !== localMode.s))) {
-    // A status from before the device handled our click: keep showing the click.
-  } else {
-    localMode = null;
-    showMode(m, s);
-  }
+  const p = dv.byteLength > 11 ? dv.getUint8(11) : 0xFF;
+  pending = p === 0xFF ? null : { m: p & 15, s: p >> 4 };
+  showMode(m, s);
+  const pendingName = pending && t(pending.m === MODE_AUTO ? 'auto' : MODE_KEYS[pending.m], pending.s + 1);
+  if (!want && pending) setHint('hintPending', pendingName);
+  else if (!want && !pending && hint?.key === 'hintPending') setHint(null);
   ui.stVbat.textContent = vbat < 500 ? t('na') : (vbat / 1000).toFixed(2) + ' V';
   ui.stPos.textContent = pos.toFixed(0) + '°';
   ui.stPos.title = t(fb ? 'measured' : 'commanded');
@@ -288,6 +315,7 @@ function applyLang() {
   if (st) onStatus(st);
   if (lastStats) onStats(lastStats);
   AUTO_SLIDERS.forEach(updateLabel);
+  MANUAL_SLIDERS.forEach(updateLabel);
   if (hint) setHint(hint.key, ...hint.args);
   ui.saveBtn.textContent = t('save', Math.max(slot, 0) + 1);
   const scan = ui.deviceSelect.querySelector('option[value=scan]');
@@ -319,6 +347,9 @@ async function connect(dev) {
       cmd: await svc.getCharacteristic(CHR_CMD),
     };
     try { chr.stats = await svc.getCharacteristic(CHR_STATS); } catch { chr.stats = null; }
+    try { chr.manual = await svc.getCharacteristic(CHR_MANUAL); } catch { chr.manual = null; }
+    if (chr.manual) decodeManual(await chr.manual.readValue());
+    $('manualMotion').hidden = !chr.manual;
     decodeAuto(await chr.auto.readValue());
     setDirty(false);
     chr.status.addEventListener('characteristicvaluechanged', e => onStatus(e.target.value));
@@ -408,11 +439,60 @@ ui.pos.addEventListener('input', () => {
   ui.posVal.textContent = ui.pos.value;
   sendPos(+ui.pos.value);
 });
-ui.pos.addEventListener('pointerdown', () => { draggingPos = true; });
-window.addEventListener('pointerup', () => { draggingPos = false; });
 
 AUTO_SLIDERS.forEach(id => $(id).addEventListener('input', () => { updateLabel(id); setDirty(true); sendAutoSoon(); }));
 ui.profile.addEventListener('change', () => { setDirty(true); sendAutoSoon(); });
+MANUAL_SLIDERS.forEach(id => $(id).addEventListener('input', () => { updateLabel(id); sendManualSoon(); }));
+$('mProfile').addEventListener('change', sendManualSoon);
+
+// Sliders move only when the drag starts on the knob - a swipe to scroll the
+// page that starts on a track must not change anything. The range inputs get
+// no pointer events (CSS); this drives them from their wrapper instead.
+const THUMB_HIT_PX = 26;
+function thumbX(input) {
+  const r = input.getBoundingClientRect(), knob = 13;   // half the 26 px thumb
+  const f = (input.value - input.min) / (input.max - input.min);
+  const rtl = getComputedStyle(input).direction === 'rtl';
+  const x = knob + f * (r.width - 2 * knob);
+  return rtl ? r.right - x : r.left + x;
+}
+function valueAt(input, clientX) {
+  const r = input.getBoundingClientRect(), knob = 13;
+  let f = (clientX - r.left - knob) / (r.width - 2 * knob);
+  if (getComputedStyle(input).direction === 'rtl') f = 1 - f;
+  f = Math.min(1, Math.max(0, f));
+  const step = +input.step || 1, min = +input.min;
+  return min + Math.round(f * (input.max - min) / step) * step;
+}
+document.querySelectorAll('input[type=range]').forEach(input => {
+  const host = input.parentElement;
+  let active = null;
+  host.addEventListener('pointerdown', e => {
+    const r = input.getBoundingClientRect();
+    if (Math.abs(e.clientX - thumbX(input)) > THUMB_HIT_PX || Math.abs(e.clientY - (r.top + r.height / 2)) > THUMB_HIT_PX) return;
+    active = e.pointerId;
+    host.setPointerCapture(e.pointerId);
+    input.classList.add('dragging');
+    if (input === ui.pos) draggingPos = true;
+    e.preventDefault();
+  });
+  host.addEventListener('pointermove', e => {
+    if (e.pointerId !== active) return;
+    const v = valueAt(input, e.clientX);
+    if (+input.value === v) return;
+    input.value = v;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const end = e => {
+    if (e.pointerId !== active) return;
+    active = null;
+    input.classList.remove('dragging');
+    if (input === ui.pos) draggingPos = false;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  host.addEventListener('pointerup', end);
+  host.addEventListener('pointercancel', end);
+});
 
 ui.saveBtn.addEventListener('click', async () => {
   if (!chr.cmd || slot < 0) return;
@@ -430,16 +510,28 @@ ui.saveBtn.addEventListener('click', async () => {
 });
 
 // Long press (touch or mouse): fires after LONG_PRESS_MS of holding.
+// Touch uses touch events: Android starts its own long-press gesture and sends
+// pointercancel, which killed the pointer-event version on the first press.
 function onLongPress(el, fn) {
-  let timer = null;
+  let timer = null, x0 = 0, y0 = 0;
   const cancel = () => { clearTimeout(timer); timer = null; el.classList.remove('holding'); };
-  el.addEventListener('pointerdown', () => {
+  const start = (x, y) => {
     cancel();
+    x0 = x; y0 = y;
     el.classList.add('holding');
     timer = setTimeout(() => { cancel(); fn(); }, LONG_PRESS_MS);
-  });
-  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => el.addEventListener(ev, cancel));
-  el.addEventListener('contextmenu', e => e.preventDefault());   // Android long-press menu
+  };
+  el.addEventListener('touchstart', e => start(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+  el.addEventListener('touchmove', e => {
+    const t0 = e.touches[0];
+    if (Math.hypot(t0.clientX - x0, t0.clientY - y0) > 10) cancel();   // it's a scroll
+  }, { passive: true });
+  el.addEventListener('touchend', cancel);
+  el.addEventListener('touchcancel', cancel);
+  el.addEventListener('mousedown', e => start(e.clientX, e.clientY));
+  el.addEventListener('mouseup', cancel);
+  el.addEventListener('mouseleave', cancel);
+  el.addEventListener('contextmenu', e => e.preventDefault());   // no long-press menu
 }
 
 onLongPress(ui.posTile, () => {
@@ -474,9 +566,11 @@ async function init() {
 function demo(m) {
   setConn('on');
   decodeAuto(new DataView(new Uint8Array([2, 0, 90, 0, 44, 1, 60, 0, 5, 0, 30, 0]).buffer));
-  const s = new DataView(new ArrayBuffer(11));
+  decodeManual(new DataView(new Uint8Array([2, 0, 90, 0, 44, 1]).buffer));
+  const s = new DataView(new ArrayBuffer(12));
   s.setUint8(0, m); s.setUint16(2, 5040, true); s.setUint16(4, 1123, true);
   s.setUint16(6, 1123, true); s.setUint16(8, m === MODE_AUTO ? 1754 : 47, true); s.setUint8(10, 1);
+  if (location.hash.endsWith('-pending')) s.setUint8(11, MODE_AUTO | 2 << 4); else s.setUint8(11, 0xFF);
   onStatus(s);
   const u = new DataView(new ArrayBuffer(24));
   [3, 2460, 41, 52380, 128, 190620].forEach((v, i) => u.setUint32(i * 4, v, true));
@@ -486,5 +580,5 @@ function demo(m) {
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 applyLang();
-if (location.hash.startsWith('#demo')) demo(location.hash === '#demo-manual' ? MODE_MANUAL : MODE_AUTO);
+if (location.hash.startsWith('#demo')) demo(location.hash.startsWith('#demo-manual') ? MODE_MANUAL : MODE_AUTO);
 else init();

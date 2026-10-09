@@ -64,7 +64,7 @@ void onStart() {
     hourBucket().count++;
     dayBucket().count++;
   }
-  save();
+  s_dirty = true;   // main flushes it a moment later - keeps NVS out of the mode change
   s_changed = true;
 }
 

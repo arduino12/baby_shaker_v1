@@ -84,9 +84,7 @@ void setLastKnown(float deg) { s_cmdDeg = clampDeg(deg); }
 
 float enableHere() {
   float here;
-  if (s_enabled) {
-    if (measure(here)) write(here);   // already powered: stop where it is now
-  } else {
+  if (!s_enabled) {
     // A valid pulse at the last known angle BEFORE power, so the servo never
     // sees a powered frame without one (that is what made it jump / go to 0).
     startPwm(s_cmdDeg);
