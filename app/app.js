@@ -10,9 +10,14 @@ const CHR_STATUS  = '8f1d0005-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_CMD     = '8f1d0006-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_STATS   = '8f1d0008-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_MANUAL  = '8f1d0009-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
+const CHR_OTA     = '8f1d000a-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
+const CHR_INFO    = '8f1d000b-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const NAME_PREFIX = 'Baby Shaker';
+const APP_VERSION = '1.5.0';   // keep in step with index.html (?v=) and sw.js
 const MODE_OFF = 0, MODE_MANUAL = 1, MODE_AUTO = 2;
 const CMD_CALIBRATE = 1, CMD_SAVE_SLOT = 2, CMD_RESET_STATS = 3, CMD_SET_TIME = 4;
+const CMD_OTA_BEGIN = 5, CMD_OTA_END = 6, CMD_OTA_ABORT = 7;
+const OTA_READY = 1, OTA_DONE = 3, OTA_FAILED = 4;
 const LONG_PRESS_MS = 700;
 
 // ------------------------------------------------------------ strings
@@ -45,6 +50,12 @@ const STR = {
     hintIos: 'Safari has no Bluetooth support. Open this page in the free "Bluefy" browser from the App Store.',
     hintNoBt: 'This browser has no Web Bluetooth. Use Chrome (Android / Windows / Mac) or Bluefy (iPhone).',
     credit: 'By Arad & Claud 2026 ©',
+    versions: 'App {0} · Firmware {1}',
+    fwTitle: 'Firmware update', fwAvailable: 'Version {0} is available (this device has {1}).',
+    fwUpdate: 'Update firmware', fwConfirm: 'Update the firmware to {0}? The motor stops during the update (about a minute). Keep the phone close to the device.',
+    fwDownload: 'Downloading…', fwProgress: 'Sending… {0}% ({1} KB/s)', fwVerify: 'Verifying…',
+    fwDone: 'Updated - the device restarts and reconnects…', fwFail: 'Update failed: {0}',
+    flagTip: 'To reconnect without choosing every time, open chrome://flags and enable "Experimental Web Platform features" and "Use the new permissions backend for Web Bluetooth".',
   },
   he: {
     langBtn: 'English',
@@ -74,6 +85,12 @@ const STR = {
     times: '{0} הפעלות', dur: '{0} ש׳ {1} ד׳', usageHint: 'לחיצה ארוכה על תיבה מאפסת אותה.',
     resetConfirm: 'לאפס את "{0}"?',
     credit: 'מאת ארד וקלוד 2026 ©',
+    versions: 'אפליקציה {0} · קושחה {1}',
+    fwTitle: 'עדכון קושחה', fwAvailable: 'גרסה {0} זמינה (במכשיר גרסה {1}).',
+    fwUpdate: 'עדכון קושחה', fwConfirm: 'לעדכן את הקושחה לגרסה {0}? המנוע ייעצר במהלך העדכון (כדקה). השאירו את הטלפון קרוב למכשיר.',
+    fwDownload: 'מוריד…', fwProgress: 'שולח… {0}% ({1} KB/s)', fwVerify: 'מאמת…',
+    fwDone: 'עודכן - המכשיר מופעל מחדש ומתחבר שוב…', fwFail: 'העדכון נכשל: {0}',
+    flagTip: 'כדי להתחבר בלי לבחור בכל פעם: פתחו ⁨chrome://flags⁩ והפעילו את ⁨"Experimental Web Platform features"⁩ ואת ⁨"Use the new permissions backend for Web Bluetooth"⁩.',
   },
 };
 
@@ -105,6 +122,7 @@ let mode = -1, slot = -1;          // as last reported by the device
 let dirty = false;                 // sliders edited since the slot was loaded/saved
 let lastStats = null;
 let pending = null;                // {m, s}: requested, waiting for the stroke to end (device-reported)
+let fwVersion = null, siteFw = null, otaLast = null, otaBusy = false;
 
 // ------------------------------------------------------------ GATT plumbing
 // Chrome rejects overlapping GATT operations, so everything goes through one chain.
@@ -181,7 +199,7 @@ function sendTime() {
 // The buttons show only what the device reports (status notification), never
 // a guess. Without-response: no round trip before the device acts on it.
 function sendMode(m, s) {
-  if (!chr.mode) return;
+  if (!chr.mode || otaBusy) return;
   const bytes = m === MODE_AUTO ? [m, s] : [m];
   gatt(() => chr.mode.writeValueWithoutResponse(new Uint8Array(bytes)))
     .catch(e => setHint('hintModeFail', e.message));
@@ -318,6 +336,8 @@ function applyLang() {
   MANUAL_SLIDERS.forEach(updateLabel);
   if (hint) setHint(hint.key, ...hint.args);
   ui.saveBtn.textContent = t('save', Math.max(slot, 0) + 1);
+  showVersions();
+  showFirmwareCard();
   const scan = ui.deviceSelect.querySelector('option[value=scan]');
   if (scan) scan.textContent = t('scan');
 }
@@ -348,6 +368,14 @@ async function connect(dev) {
     };
     try { chr.stats = await svc.getCharacteristic(CHR_STATS); } catch { chr.stats = null; }
     try { chr.manual = await svc.getCharacteristic(CHR_MANUAL); } catch { chr.manual = null; }
+    try { chr.ota = await svc.getCharacteristic(CHR_OTA); } catch { chr.ota = null; }
+    try {
+      fwVersion = new TextDecoder().decode(await (await svc.getCharacteristic(CHR_INFO)).readValue());
+    } catch { fwVersion = null; }
+    if (chr.ota) {
+      chr.ota.addEventListener('characteristicvaluechanged', e => { const r = parseOta(e.target.value); if (r) otaLast = r; });
+      await chr.ota.startNotifications();
+    }
     if (chr.manual) decodeManual(await chr.manual.readValue());
     $('manualMotion').hidden = !chr.manual;
     decodeAuto(await chr.auto.readValue());
@@ -362,6 +390,9 @@ async function connect(dev) {
     }
     setConn('on');
     onStatus(await chr.status.readValue());
+    try { localStorage.setItem('lastDevice', dev.name || ''); } catch {}
+    showVersions();
+    checkFirmware();
   } catch (e) {
     console.error(e);
     chr = {};
@@ -374,6 +405,7 @@ async function connect(dev) {
 
 async function onDisconnected() {
   chr = {};
+  showFirmwareCard();
   posBusy = false; posPending = null;
   setConn('off');
   if (userDisconnect || !device) return;
@@ -409,6 +441,36 @@ async function refreshRemembered() {
   sel.hidden = remembered.length < 2;
 }
 
+// The device this browser connected to last (Chrome remembers permission only
+// with the flags in STR.flagTip; without them getDevices() doesn't exist).
+function lastRemembered() {
+  let name = '';
+  try { name = localStorage.getItem('lastDevice') || ''; } catch {}
+  return remembered.find(d => d.name === name) || (remembered.length === 1 ? remembered[0] : null);
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Page load: connect to the remembered device without the chooser - once it is
+// heard advertising (after a reload Chrome doesn't know it is in range), and
+// with time limits, so a device that is off doesn't keep the page "connecting".
+async function connectRemembered(dev) {
+  if (dev.watchAdvertisements) {
+    const ac = new AbortController();
+    try {
+      const heard = new Promise(res => dev.addEventListener('advertisementreceived', () => res(true), { once: true }));
+      await dev.watchAdvertisements({ signal: ac.signal });
+      const ok = await Promise.race([heard, sleep(8000).then(() => false)]);
+      ac.abort();
+      if (!ok) return false;
+    } catch { ac.abort(); }
+  }
+  try {
+    await Promise.race([connect(dev), sleep(10000).then(() => { throw new Error('timeout'); })]);
+    return true;
+  } catch { return false; }
+}
+
 ui.connectBtn.addEventListener('click', async () => {
   if (device && device.gatt.connected) {
     userDisconnect = true;
@@ -416,6 +478,8 @@ ui.connectBtn.addEventListener('click', async () => {
     return;
   }
   try {
+    // A tap always opens the chooser (unless a remembered device is picked in
+    // the list): the browser only allows it right after the tap.
     const sel = ui.deviceSelect;
     if (!sel.hidden && sel.value !== 'scan') await connect(remembered[+sel.value]);
     else await scanAndConnect();
@@ -545,6 +609,110 @@ document.querySelectorAll('[data-reset]').forEach(el => onLongPress(el, () => {
   if (confirm(t('resetConfirm', name))) sendCmd([CMD_RESET_STATS, which]).catch(e => console.warn('reset', e));
 }));
 
+// ------------------------------------------------------------ firmware update
+function showVersions() {
+  $('versions').textContent = t('versions', APP_VERSION, fwVersion || '—');
+}
+
+const newer = (a, b) => {   // is version a newer than b ("1.10.0" > "1.9.2")
+  const x = a.split('.').map(Number), y = (b || '0').split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+};
+
+async function checkFirmware() {
+  try {
+    siteFw = await (await fetch('fw/version.json', { cache: 'no-store' })).json();
+  } catch { siteFw = null; }
+  showFirmwareCard();
+}
+
+function showFirmwareCard() {
+  const show = otaBusy || (connState === 'on' && chr.ota && siteFw && fwVersion && newer(siteFw.version, fwVersion));
+  $('fwCard').hidden = !show;
+  if (show && !otaBusy) {
+    $('fwText').textContent = t('fwAvailable', siteFw.version, fwVersion);
+    $('fwBtn').textContent = t('fwUpdate');
+  }
+}
+
+function parseOta(dv) {
+  if (dv.byteLength !== 12) return null;
+  return { state: dv.getUint8(0), err: dv.getUint8(1), mtu: dv.getUint16(2, true),
+           size: dv.getUint32(4, true), rx: dv.getUint32(8, true) };
+}
+
+async function waitOta(pred, ms) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    if (otaLast && pred(otaLast)) return true;
+    await new Promise(r => setTimeout(r, 20));
+  }
+  return false;
+}
+
+const u32 = v => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
+
+// Image goes as chunks of [u32 offset][data], sized from the MTU the device
+// reports. Up to 4 KB may be in flight; the device reports every 4 KB, and a
+// lost chunk shows up as a report behind our offset - we resume from there.
+async function updateFirmware() {
+  if (otaBusy || !siteFw || !confirm(t('fwConfirm', siteFw.version))) return;
+  otaBusy = true;
+  const text = $('fwText'), bar = $('fwBar');
+  $('fwBtn').hidden = true;
+  bar.hidden = false;
+  bar.value = 0;
+  try {
+    text.textContent = t('fwDownload');
+    const img = new Uint8Array(await (await fetch(`fw/firmware.bin?v=${siteFw.version}`, { cache: 'no-store' })).arrayBuffer());
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', img))].map(b => b.toString(16).padStart(2, '0')).join('');
+    if (img.length !== siteFw.size || (siteFw.sha256 && hash !== siteFw.sha256)) throw new Error('download corrupted');
+
+    otaLast = null;
+    await sendCmd([CMD_OTA_BEGIN, ...u32(img.length)]);
+    if (!await waitOta(r => r.state === OTA_READY || r.state === OTA_FAILED, 15000) || otaLast.state !== OTA_READY)
+      throw new Error('device not ready' + (otaLast ? ` (${otaLast.err})` : ''));
+    const chunk = Math.max(16, Math.min(otaLast.mtu - 7, 500));
+    const t0 = Date.now();
+    let off = 0;
+    while (off < img.length) {
+      for (let k = 0; k < 16 && off < img.length; k++) {
+        const part = img.subarray(off, off + chunk);
+        const buf = new Uint8Array(4 + part.length);
+        buf.set(u32(off));
+        buf.set(part, 4);
+        await gatt(() => chr.ota.writeValueWithoutResponse(buf));
+        off += part.length;
+      }
+      if (!await waitOta(r => r.rx >= off - 4096 || r.state === OTA_FAILED, 2000)) {
+        const r = parseOta(await gatt(() => chr.ota.readValue()));
+        if (r) { otaLast = r; if (r.rx < off) off = r.rx; }   // resume where the device is
+      }
+      if (otaLast && otaLast.state === OTA_FAILED) throw new Error(`device error ${otaLast.err}`);
+      const kbs = off / 1024 / Math.max(0.1, (Date.now() - t0) / 1000);
+      bar.value = off / img.length;
+      text.textContent = t('fwProgress', Math.floor(100 * off / img.length), kbs.toFixed(1));
+    }
+    await waitOta(r => r.rx >= img.length || r.state === OTA_FAILED, 5000);
+    text.textContent = t('fwVerify');
+    await sendCmd([CMD_OTA_END]);
+    if (!await waitOta(r => r.state === OTA_DONE || r.state === OTA_FAILED, 20000) || otaLast.state !== OTA_DONE)
+      throw new Error(`verification failed (${otaLast ? otaLast.err : '?'})`);
+    text.textContent = t('fwDone');   // the device restarts; onDisconnected reconnects
+    fwVersion = null;
+  } catch (e) {
+    text.textContent = t('fwFail', e.message);
+    sendCmd([CMD_OTA_ABORT]).catch(() => {});
+    $('fwBtn').hidden = false;
+  } finally {
+    otaBusy = false;
+    bar.hidden = true;
+  }
+}
+
+$('fwBtn').addEventListener('click', updateFirmware);
+
 // ------------------------------------------------------------ start-up
 async function init() {
   if (!navigator.bluetooth) {
@@ -553,13 +721,20 @@ async function init() {
     return;
   }
   await refreshRemembered();
-  if (remembered.length === 1) {
-    // Exactly one known device: connect without the chooser.
-    try { await connect(remembered[0]); return; } catch {}
-    setHint('hintUnreachable', remembered[0].name);
+  const last = lastRemembered();
+  if (last) {
+    // The device used last time: connect without the chooser.
+    setConn('busy');
+    if (await connectRemembered(last)) return;
+    setConn('off');
+    setHint('hintUnreachable', last.name);
+  } else if (remembered.length) {
+    setHint('hintSelect');
   } else {
-    setHint(remembered.length ? 'hintSelect' : 'hintPick');
+    setHint('hintPick');
   }
+  // Chrome without the flags can't remember devices: say how to turn them on.
+  $('flagTip').hidden = !!navigator.bluetooth.getDevices || /iPhone|iPad|iPod/.test(navigator.userAgent);
 }
 
 // #demo, #demo-manual: render the connected UI with fake status (layout checks, no device).
@@ -578,7 +753,8 @@ function demo(m) {
   if (m === MODE_AUTO) setDirty(true);
 }
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+// updateViaCache 'none': the browser checks sw.js itself without its HTTP cache.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
 applyLang();
 if (location.hash.startsWith('#demo')) demo(location.hash.startsWith('#demo-manual') ? MODE_MANUAL : MODE_AUTO);
 else init();

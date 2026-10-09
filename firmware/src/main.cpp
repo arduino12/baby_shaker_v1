@@ -8,12 +8,13 @@
 //            (Auto 1..4), each with its own parameter set in NVS. Slider
 //            edits apply live; CMD_SAVE_SLOT stores them into the active slot.
 //
-// A mode change that arrives while the arm is moving waits for the current
-// stroke to end (reported as "pending" in the status), so nothing jerks.
-// Only a stall stops at once.
+// A mode change never interrupts motion: it waits (reported as "pending")
+// until the command has finished its move - Auto: its full cycle, see
+// AUTO_FINISH_FULL_CYCLE - AND the pot confirms the arm got there. The next
+// mode then starts from exactly that angle. Only a stall stops at once.
 //
 // Serial commands (115200): off | man [deg] | auto [1-4] | save | cal | calinfo |
-//   stats [reset 0-2] | time <epoch> | status
+//   stats [reset 0-2] | time <epoch> | status | version | trace [0|1]
 //   set <profile> <speed> <accel> <travel> <hold x0.1s> <minutes>  (live; 'save' to keep)
 
 #include <Arduino.h>
@@ -24,6 +25,7 @@
 #include "led.h"
 #include "motion.h"
 #include "mover.h"
+#include "ota.h"
 #include "servo_ctrl.h"
 #include "settings.h"
 #include "stats.h"
@@ -41,6 +43,10 @@ static uint8_t      g_slot = 0;           // active Auto button
 static bool         g_stalled = false;    // last stop was a stall (cleared by the next mode change)
 static bool         g_calibrating = false;
 static uint32_t     g_lastStatsMs = 0;
+static uint32_t     g_restSinceMs = 0;   // pending change: when the command came to rest
+static bool         g_trace = false;     // serial: stream position at 50 Hz
+static bool         g_restartAt = false;
+static uint32_t     g_restartMs = 0;
 
 // A mode request waiting for the arm to come to rest.
 static struct {
@@ -76,8 +82,27 @@ static ManualParams manualParams() {
   return p;
 }
 
-static bool moving() {
-  return (g_mode == MODE_AUTO && !g_motion.atRest()) || (g_mode == MODE_MANUAL && !g_mover.atRest());
+// The command has finished its motion (Auto: its stroke or, with
+// AUTO_FINISH_FULL_CYCLE, its whole cycle).
+static bool commandAtRest() {
+  if (g_mode == MODE_AUTO) return AUTO_FINISH_FULL_CYCLE ? g_motion.atCycleEnd() : g_motion.atRest();
+  if (g_mode == MODE_MANUAL) return g_mover.atRest();
+  return true;
+}
+
+// Ready for a pending mode change: the command is at rest and the pot confirms
+// the arm is there (or it could not get there within SETTLE_TIMEOUT_MS).
+static bool readyToSwitch(uint32_t now) {
+  if (!commandAtRest()) {
+    g_restSinceMs = 0;
+    return false;
+  }
+  if (!g_restSinceMs) g_restSinceMs = now ? now : 1;
+  if (servo::atTarget()) return true;
+  if (now - g_restSinceMs < SETTLE_TIMEOUT_MS) return false;
+  Serial.printf("[mode] arm not at %.1f deg after %lu ms (pot %.1f) - switching anyway\n",
+                servo::written(), (unsigned long)SETTLE_TIMEOUT_MS, servo::read());
+  return true;
 }
 
 static uint16_t remainingS(uint32_t now) {
@@ -97,7 +122,7 @@ static void sendStatus(uint32_t now) {
   s.flags = (servo::feedbackValid() ? 1 : 0) | (g_stalled ? 2 : 0) | (g_calibrating ? 4 : 0);
   s.vbatMv = servo::readVbatMv();
   s.posDeg10 = (uint16_t)(servo::read() * 10 + 0.5f);
-  s.targetDeg10 = (uint16_t)((g_mode == MODE_MANUAL ? g_mover.target() : servo::commanded()) * 10 + 0.5f);
+  s.targetDeg10 = (uint16_t)((g_mode == MODE_MANUAL ? g_mover.target() : servo::written()) * 10 + 0.5f);
   s.remainingS = remainingS(now);
   s.slot = g_slot;
   s.pending = g_pending.active ? (uint8_t)(g_pending.mode | g_pending.slot << 4) : 0xFF;
@@ -121,18 +146,24 @@ static void setMode(Mode m, uint32_t now, uint8_t slot = ble::NO_SLOT, bool stal
   g_modeStartMs = now;
   if (m != MODE_OFF) g_stalled = false;
   if (prev == MODE_OFF && m != MODE_OFF) stats::onStart();
+  g_restSinceMs = 0;
+  // Where the next mode starts: from Off, start() measures the arm and pulses
+  // there; otherwise the arm is (pot-confirmed) at the current command.
+  float from = servo::written();
   switch (m) {
     case MODE_OFF:
-      servo::disable(!stall);   // after a stall the pot may be what failed: don't trust it
+      servo::stop(!stall);   // after a stall the pot may be what failed: don't trust it
       break;
     case MODE_MANUAL:
       g_lastManualMs = now;
+      from = servo::start();
       g_mover.setParams(manualParams());
-      g_mover.reset(servo::enableHere());   // hold where the arm is; the app's slider follows
+      g_mover.reset(from);   // hold where the arm is; the app's slider follows the status
       if (hasTarget) g_mover.setTarget(target, millis());
       break;
     case MODE_AUTO:
-      g_motion.start(servo::enableHere(), motionParams(), now);
+      from = servo::start();
+      g_motion.start(from, motionParams(), millis());
       break;
   }
   g_saveDue = true;
@@ -140,15 +171,15 @@ static void setMode(Mode m, uint32_t now, uint8_t slot = ble::NO_SLOT, bool stal
   ble::publishMode(m);
   sendStatus(now);
   const float ms = (micros() - t0) / 1000.0f;
-  if (m == MODE_AUTO) Serial.printf("[mode] AUTO %u (%.1f ms)\n", g_slot + 1, ms);
-  else Serial.printf("[mode] %s (%.1f ms)\n", modeName(m), ms);
+  if (m == MODE_AUTO) Serial.printf("[mode] AUTO %u from %.1f deg (%.1f ms)\n", g_slot + 1, from, ms);
+  else Serial.printf("[mode] %s from %.1f deg (%.1f ms)\n", modeName(m), from, ms);
 }
 
 // Mode change from the user: applies now if the arm is at rest, otherwise when
 // the current stroke ends. Asking for the mode that is already on cancels a
 // pending change.
 static void requestMode(Mode m, uint32_t now, uint8_t slot = ble::NO_SLOT) {
-  if (m > MODE_AUTO) return;
+  if (m > MODE_AUTO || ota::active()) return;
   if (m == MODE_AUTO && slot >= SLOT_COUNT) slot = g_slot;
   if (m == g_mode && (m != MODE_AUTO || slot == g_slot)) {
     if (g_pending.active) {
@@ -157,11 +188,11 @@ static void requestMode(Mode m, uint32_t now, uint8_t slot = ble::NO_SLOT) {
     }
     return;
   }
-  if (moving()) {
+  if (g_mode != MODE_OFF && !readyToSwitch(now)) {
     g_pending.active = true;
     g_pending.mode = m;
     g_pending.slot = m == MODE_AUTO ? slot : 0;
-    Serial.printf("[mode] %s waits for the stroke to end\n", modeName(m));
+    Serial.printf("[mode] %s waits for the motion to finish\n", modeName(m));
     sendStatus(now);
     return;
   }
@@ -217,17 +248,32 @@ static void calibrate(uint32_t now) {
   } else {
     Serial.println("[cal] FAILED: pot did not follow the PWM (not wired?) - old calibration kept");
   }
-  if (g_mode == MODE_MANUAL) g_mover.reset(servo::commanded());
+  if (g_mode == MODE_MANUAL) g_mover.reset(servo::written());
+  if (g_mode == MODE_AUTO) g_motion.start(servo::written(), motionParams(), millis());
   g_calibrating = false;
   sendStatus(millis());
 }
 
 static void onStall(uint32_t now) {
   Serial.printf("[stall] target %.1f deg, pot %.1f deg, reference %.1f deg - stopping\n",
-                servo::commanded(), servo::read(), servo::stallModel());
+                servo::written(), servo::read(), servo::stallModel());
   setMode(MODE_OFF, now, ble::NO_SLOT, true);   // at once - no waiting for the stroke
   g_stalled = true;
   sendStatus(now);
+}
+
+static void otaBegin(uint32_t size, uint32_t now) {
+  if (g_mode != MODE_OFF) setMode(MODE_OFF, now);   // the motor stops for an update
+  g_pending = {};
+  ble::fastLink();
+  ota::begin(size);
+}
+
+static void otaEnd() {
+  if (ota::finish()) {   // verified; boot partition switched
+    g_restartAt = true;
+    g_restartMs = millis();
+  }
 }
 
 static void handleSerial(uint32_t now) {
@@ -258,6 +304,8 @@ static void handleSerial(uint32_t now) {
         setManualParams({(uint8_t)v[0], 0, (uint16_t)v[1], (uint16_t)v[2]}, now);
     }
     else if (line == "cal") calibrate(now);
+    else if (line == "version") Serial.printf("firmware %s, built " __DATE__ " " __TIME__ "\n", FW_VERSION);
+    else if (line.startsWith("trace")) g_trace = line.substring(5).toInt() != 0 || line == "trace";
     else if (line == "stats") {
       const stats::Summary s = stats::summary();
       Serial.printf("stats (time %s): 24h %lu x / %lu s, 30d %lu x / %lu s, all %lu x / %lu s\n",
@@ -269,7 +317,7 @@ static void handleSerial(uint32_t now) {
     else if (line == "status")
       Serial.printf("mode=%s slot=%u pending=%s pos=%.1f cmd=%.1f vbat=%umV fb=%d ble=%d prof=%u v=%u a=%u trav=%u hold=%.1fs dur=%umin rem=%us manual=%u/%u/%u\n",
                     modeName(g_mode), g_slot + 1, g_pending.active ? modeName(g_pending.mode) : "-",
-                    servo::read(), servo::commanded(), servo::readVbatMv(),
+                    servo::read(), servo::written(), servo::readVbatMv(),
                     servo::feedbackValid(), ble::connected(), g_auto.profile, g_auto.speed,
                     g_auto.accel, g_auto.travel, g_auto.holdDs / 10.0f, g_auto.durationMin,
                     remainingS(now), g_manual.profile, g_manual.speed, g_manual.accel);
@@ -279,9 +327,31 @@ static void handleSerial(uint32_t now) {
       for (int i = 0; i < CAL_POINTS; i++) Serial.printf(" %u", k.mv[i]);
       Serial.println();
     }
-    else if (line.length()) Serial.println("? off | man [deg] | auto [1-4] | set p v a t h d | mset p v a | save | cal | calinfo | stats [reset 0-2] | time <epoch> | status");
+    else if (line.length()) Serial.println("? off | man [deg] | auto [1-4] | set p v a t h d | mset p v a | save | cal | calinfo | stats [reset 0-2] | time <epoch> | status | version | trace [0|1]");
     line = "";
   }
+}
+
+// Diagnostics: a pot reading moving faster than the servo can is logged (a
+// real jump, or a pot glitch); `trace 1` streams t, mode, command, pot.
+static void watchPot(uint32_t now) {
+  static float lastDeg = -1;
+  static uint32_t lastMs = 0;
+  float deg;
+  if (!servo::measure(deg)) {
+    lastDeg = -1;
+  } else {
+    if (lastDeg >= 0 && now > lastMs) {
+      const float dps = fabsf(deg - lastDeg) / ((now - lastMs) / 1000.0f);
+      if (dps > POT_JUMP_DPS)
+        Serial.printf("[jump] pot %.1f -> %.1f deg in %lu ms (mode %s, command %.1f)\n", lastDeg, deg,
+                      (unsigned long)(now - lastMs), modeName(g_mode), servo::written());
+    }
+    lastDeg = deg;
+    lastMs = now;
+  }
+  if (g_trace) Serial.printf("T %lu %c %.1f %.1f%s\n", (unsigned long)now, "OMA"[g_mode], servo::written(),
+                             lastDeg, g_pending.active ? " P" : "");
 }
 
 // ESP-IDF / NimBLE logs default to UART0, which the SuperMini doesn't expose.
@@ -303,11 +373,10 @@ void setup() {
   g_slot = settings::loadActiveSlot();
   g_auto = g_slots[g_slot];
   g_manual = settings::loadManual();
-  servo::begin(settings::loadPotCal());
-  servo::setLastKnown(settings::loadLastPos(SERVO_MAX_DEG / 2));
+  servo::begin(settings::loadPotCal(), settings::loadLastPos(SERVO_MAX_DEG / 2));
   stats::begin();
   ble::begin(g_auto, g_manual);
-  Serial.printf("Baby Shaker V1 - %s\n", ble::deviceName());
+  Serial.printf("Baby Shaker V1 - %s - firmware %s\n", ble::deviceName(), FW_VERSION);
 }
 
 void loop() {
@@ -323,17 +392,27 @@ void loop() {
     if (in.cmd == ble::CMD_SAVE_SLOT) saveSlot();
     if (in.cmd == ble::CMD_CALIBRATE) calibrate(now);
     if (in.cmd == ble::CMD_RESET_STATS) stats::reset((stats::Which)in.cmdArgs[0]);
-    if (in.cmd == ble::CMD_SET_TIME)
-      stats::setTime(in.cmdArgs[0] | in.cmdArgs[1] << 8 | in.cmdArgs[2] << 16 | (uint32_t)in.cmdArgs[3] << 24);
+    const uint32_t arg32 = in.cmdArgs[0] | in.cmdArgs[1] << 8 | in.cmdArgs[2] << 16 | (uint32_t)in.cmdArgs[3] << 24;
+    if (in.cmd == ble::CMD_SET_TIME) stats::setTime(arg32);
+    if (in.cmd == ble::CMD_OTA_BEGIN) otaBegin(arg32, now);
+    if (in.cmd == ble::CMD_OTA_END) otaEnd();
+    if (in.cmd == ble::CMD_OTA_ABORT) ota::abort();
+  }
+  if (g_restartAt && millis() - g_restartMs > 800) {   // let the DONE report go out first
+    Serial.println("[ota] restarting");
+    delay(50);
+    ESP.restart();
   }
   handleSerial(now);
 
   if (now - lastTick >= CONTROL_PERIOD_MS) {
     lastTick = now;
-    if (servo::enabled() && servo::stalled(now)) {
+    servo::sample();
+    if (servo::running() && servo::stalled(now)) {
       onStall(now);
-    } else if (g_pending.active && !moving()) {
-      setMode(g_pending.mode, now, g_pending.slot);   // the stroke has ended
+    } else if (g_pending.active && commandAtRest()) {
+      // Motion finished: hold still (no new stroke) until the pot confirms.
+      if (readyToSwitch(now)) setMode(g_pending.mode, now, g_pending.slot);
     } else if (g_mode == MODE_MANUAL) {
       if (now - g_lastManualMs >= MANUAL_TIMEOUT_MS && !g_pending.active) {
         Serial.println("[mode] manual idle timeout");
@@ -347,13 +426,14 @@ void loop() {
       }
       servo::write(g_motion.update(now));
     }
+    watchPot(now);
   }
 
   // Deferred NVS writes, a second after the last mode change / slider drag.
   if (g_saveDue && now - g_saveDueMs >= 1000) {
     g_saveDue = false;
     settings::saveActiveSlot(g_slot);
-    if (g_mode == MODE_OFF) settings::saveLastPos(servo::commanded());
+    if (g_mode == MODE_OFF) settings::saveLastPos(servo::written());
     stats::flush();
   }
   if (g_manualSaveDue && now - g_manualSaveDueMs >= 2000) {

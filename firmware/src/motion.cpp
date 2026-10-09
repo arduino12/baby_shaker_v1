@@ -18,6 +18,7 @@ void Motion::start(float fromDeg, const AutoParams &p, uint32_t nowMs) {
   m_pos = fromDeg;
   m_towardHigh = fabsf(endpoint(true) - fromDeg) <= fabsf(endpoint(false) - fromDeg);
   m_approach = true;
+  m_anchorHigh = m_towardHigh;
   beginStroke(fromDeg, nowMs);
 }
 

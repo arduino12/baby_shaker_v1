@@ -11,6 +11,9 @@ class Motion {
   // Standing still (holding at an end, or paused): a mode change can apply
   // now without a jerk. While a stroke runs it waits for the stroke to end.
   bool  atRest() const { return m_holding || m_seg.T <= 0; }
+  // At rest at the end of the swing where the cycle started (the first end
+  // reached after start()): a full there-and-back cycle is complete.
+  bool  atCycleEnd() const { return atRest() && (m_seg.T <= 0 || m_towardHigh == m_anchorHigh); }
 
   // One rest-to-rest move with a velocity profile (also used by Manual).
   struct Segment {
@@ -32,6 +35,7 @@ class Motion {
   bool       m_holding = false;
   bool       m_approach = false;   // first move from wherever the arm was: eased in
   bool       m_towardHigh = true;
+  bool       m_anchorHigh = true;    // the end the cycle starts and finishes at
   uint32_t   m_t0 = 0;
   float      m_pos = 0;
 };

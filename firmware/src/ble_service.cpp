@@ -8,31 +8,50 @@
 namespace ble {
 
 static char                 s_name[24];
-static NimBLECharacteristic *s_modeChr, *s_autoChr, *s_statusChr, *s_statsChr, *s_manualChr;
+static NimBLECharacteristic *s_modeChr, *s_autoChr, *s_statusChr, *s_statsChr, *s_manualChr, *s_otaChr;
 static NimBLEServer         *s_server;
 static volatile bool        s_connected = false;
+static volatile uint16_t    s_conn = BLE_HS_CONN_HANDLE_NONE;   // newest link (MTU, OTA)
 static Inbox                s_inbox;
 static portMUX_TYPE         s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 class ServerCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *srv, NimBLEConnInfo &info) override {
     s_connected = true;
+    s_conn = info.getConnHandle();
     // Snappy slider response: 15-30 ms connection interval, 4 s supervision timeout.
     srv->updateConnParams(info.getConnHandle(), 12, 24, 0, 400);
+    // Ask for a big ATT MTU from our side too: Chrome never asks, and OTA
+    // chunks are limited to MTU - 3 bytes.
+    ble_gattc_exchange_mtu(info.getConnHandle(), nullptr, nullptr);
     Serial.println("[ble] connected");
   }
   void onDisconnect(NimBLEServer *srv, NimBLEConnInfo &, int reason) override {
     // The count still includes the link that is going away.
     s_connected = srv->getConnectedCount() > 1;
     Serial.printf("[ble] disconnected (reason %d)\n", reason);
-    // NimBLE restarts advertising on its own (advertiseOnDisconnect).
+    // Advertising is restarted by poll(), not here.
   }
+  void onMTUChange(uint16_t mtu, NimBLEConnInfo &) override { Serial.printf("[ble] MTU %u\n", mtu); }
 };
 
 class WriteCb : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
+  // A write sets the characteristic's value too - for OTA, put the progress
+  // report back before anyone reads it.
+  void onRead(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    if (c == s_otaChr) {
+      const ota::Report r = ota::report(s_server->getPeerMTU(info.getConnHandle()));
+      c->setValue((const uint8_t *)&r, sizeof(r));
+    }
+  }
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
     const NimBLEAttValue v = c->getValue();
     const NimBLEUUID uuid = c->getUUID();
+    if (uuid == NimBLEUUID(BLE_OTA_UUID)) {   // firmware chunk: straight to flash
+      s_conn = info.getConnHandle();
+      ota::onChunk(v.data(), v.size());
+      return;
+    }
     portENTER_CRITICAL(&s_mux);
     if (uuid == NimBLEUUID(BLE_MODE_UUID) && v.size() >= 1) {
       s_inbox.hasMode = true;
@@ -66,7 +85,15 @@ void begin(const AutoParams &initial, const ManualParams &manualInitial) {
   snprintf(s_name, sizeof(s_name), BLE_NAME_PREFIX "%02X%02X", b4, b5);
 
   NimBLEDevice::init(s_name);
+#ifdef BLE_TEST_ADDRESS
+  // Bench builds only: a random static address, so a PC whose BLE stack has
+  // cached a stale GATT table for the real address sees a fresh device.
+  const uint8_t addr[6] = {0x5A, b5, b4, 0xBB, 0x5B, 0xC0 | 0x1A};   // LSB first, top bits 11 = static
+  NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
+  NimBLEDevice::setOwnAddr(addr);
+#endif
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  NimBLEDevice::setMTU(517);
   NimBLEServer *srv = s_server = NimBLEDevice::createServer();
   srv->setCallbacks(&s_serverCb, false);
 
@@ -82,11 +109,16 @@ void begin(const AutoParams &initial, const ManualParams &manualInitial) {
   NimBLECharacteristic *cmd = svc->createCharacteristic(BLE_CMD_UUID, NIMBLE_PROPERTY::WRITE);
   s_statsChr = svc->createCharacteristic(BLE_STATS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   s_manualChr = svc->createCharacteristic(BLE_MANUAL_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+  s_otaChr = svc->createCharacteristic(BLE_OTA_UUID,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY, 512);
+  NimBLECharacteristic *info = svc->createCharacteristic(BLE_INFO_UUID, NIMBLE_PROPERTY::READ);
 
-  for (NimBLECharacteristic *c : {s_modeChr, pos, s_autoChr, cmd, s_manualChr}) c->setCallbacks(&s_writeCb);
+  for (NimBLECharacteristic *c : {s_modeChr, pos, s_autoChr, cmd, s_manualChr, s_otaChr}) c->setCallbacks(&s_writeCb);
   s_modeChr->setValue((uint8_t)MODE_OFF);
   s_autoChr->setValue((const uint8_t *)&initial, sizeof(initial));
   s_manualChr->setValue((const uint8_t *)&manualInitial, sizeof(manualInitial));
+  info->setValue(FW_VERSION);
+  publishOta();
 
   // Name in the advertisement (the app filters on it), 128-bit service UUID
   // in the scan response - both won't fit in 31 bytes together.
@@ -100,7 +132,8 @@ void begin(const AutoParams &initial, const ManualParams &manualInitial) {
   a->setMinInterval(320);   // 200 ms: quick to find, light on power
   a->setMaxInterval(480);   // 300 ms
   a->start();
-  Serial.printf("[ble] advertising as \"%s\"\n", s_name);
+  Serial.printf("[ble] advertising as \"%s\" (%s), firmware %s\n", s_name,
+                NimBLEDevice::getAddress().toString().c_str(), FW_VERSION);
 }
 
 // NimBLE-Arduino 2.x does NOT restart advertising after a disconnect by
@@ -109,6 +142,7 @@ void begin(const AutoParams &initial, const ManualParams &manualInitial) {
 // free (3 by default), so a leftover link from a refreshed page can't lock
 // the next client out either.
 void poll() {
+  if (ota::reportDue()) publishOta();
   static uint32_t last = 0;
   if (millis() - last < 250) return;
   last = millis();
@@ -145,6 +179,19 @@ void publishStats(const stats::Summary &s) {
 void publishStatus(const Status &s) {
   s_statusChr->setValue((const uint8_t *)&s, sizeof(s));
   if (s_connected) s_statusChr->notify();
+}
+
+void publishOta() {
+  const uint16_t mtu = s_conn != BLE_HS_CONN_HANDLE_NONE && s_server ? s_server->getPeerMTU(s_conn) : 23;
+  const ota::Report r = ota::report(mtu);
+  s_otaChr->setValue((const uint8_t *)&r, sizeof(r));
+  // Explicit data: a chunk being written right now overwrites the value, so
+  // notify() of "the current value" could send a chunk instead of the report.
+  if (s_connected) s_otaChr->notify((const uint8_t *)&r, sizeof(r));
+}
+
+void fastLink() {
+  if (s_conn != BLE_HS_CONN_HANDLE_NONE) s_server->updateConnParams(s_conn, 6, 12, 0, 400);   // 7.5-15 ms
 }
 
 }  // namespace ble

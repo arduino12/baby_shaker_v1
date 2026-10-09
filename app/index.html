@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=1.5.0">
 </head>
 <body>
   <header>
@@ -26,6 +26,7 @@
         <button id="connectBtn" class="go">Connect</button>
       </div>
       <p id="hint" class="hint"></p>
+      <p id="flagTip" class="hint" data-i18n="flagTip" hidden></p>
     </section>
 
     <section class="card" id="statusCard" hidden>
@@ -104,6 +105,13 @@
       <button id="saveBtn">Save</button>
     </section>
 
+    <section class="card" id="fwCard" hidden>
+      <span class="card-title" data-i18n="fwTitle">Firmware update</span>
+      <p id="fwText" class="hint"></p>
+      <progress id="fwBar" max="1" value="0" hidden></progress>
+      <button id="fwBtn" class="primary">Update firmware</button>
+    </section>
+
     <section class="card" id="usageCard" hidden>
       <span class="card-title" data-i18n="usage">Statistics</span>
       <div class="usage">
@@ -115,8 +123,11 @@
     </section>
   </main>
 
-  <footer data-i18n="credit">By Arad &amp; Claud 2026 ©</footer>
+  <footer>
+    <span data-i18n="credit">By Arad &amp; Claud 2026 ©</span>
+    <span id="versions" class="versions"></span>
+  </footer>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=1.5.0"></script>
 </body>
 </html>
