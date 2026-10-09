@@ -4,7 +4,7 @@
 
 // Shown in the app; the app offers an update when the site has a newer one.
 #ifndef FW_VERSION   // bench builds may override it
-#define FW_VERSION "1.5.0"
+#define FW_VERSION "1.5.1"
 #endif
 
 // ---------------------------------------------------------------- pins

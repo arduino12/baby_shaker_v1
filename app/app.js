@@ -13,10 +13,10 @@ const CHR_MANUAL  = '8f1d0009-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_OTA     = '8f1d000a-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_INFO    = '8f1d000b-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const NAME_PREFIX = 'Baby Shaker';
-const APP_VERSION = '1.5.0';   // keep in step with index.html (?v=) and sw.js
+const APP_VERSION = '1.5.1';   // keep in step with index.html (?v=) and sw.js
 const MODE_OFF = 0, MODE_MANUAL = 1, MODE_AUTO = 2;
 const CMD_CALIBRATE = 1, CMD_SAVE_SLOT = 2, CMD_RESET_STATS = 3, CMD_SET_TIME = 4;
-const CMD_OTA_BEGIN = 5, CMD_OTA_END = 6, CMD_OTA_ABORT = 7;
+const CMD_OTA_BEGIN = 5, CMD_OTA_END = 6, CMD_OTA_ABORT = 7, CMD_DROP_LINK = 8;
 const OTA_READY = 1, OTA_DONE = 3, OTA_FAILED = 4;
 const LONG_PRESS_MS = 700;
 
@@ -35,6 +35,7 @@ const STR = {
     noLimit: '0 (no limit)', left: '({0} left)', na: 'N/A',
     measured: 'Measured', commanded: 'Commanded (no feedback)',
     scan: 'Scan for devices…',
+    hintTapToChoose: '{0} did not answer - tap Connect to choose from the list.',
     hintPick: 'Tap Connect and pick your Baby Shaker.', hintSelect: 'Select a device and tap Connect.',
     hintUnreachable: '{0} not reachable - make sure it is powered, then tap Connect.',
     hintFail: 'Could not connect to {0}: {1}', hintLost: 'Connection lost. Tap Connect.',
@@ -70,6 +71,7 @@ const STR = {
     noLimit: '0 (ללא הגבלה)', left: '(נותרו {0})', na: 'לא זמין',
     measured: 'נמדד', commanded: 'לפי פקודה (אין משוב)',
     scan: 'חפש מכשירים…',
+    hintTapToChoose: '{0} לא ענה - לחצו "התחברות" כדי לבחור מהרשימה.',
     hintPick: 'לחצו "התחברות" ובחרו את ה-Baby Shaker שלכם.', hintSelect: 'בחרו מכשיר ולחצו "התחברות".',
     hintUnreachable: '{0} לא זמין - ודאו שהוא דולק ולחצו "התחברות".',
     hintFail: 'החיבור ל-{0} נכשל: {1}', hintLost: 'החיבור נותק. לחצו "התחברות".',
@@ -125,10 +127,16 @@ let pending = null;                // {m, s}: requested, waiting for the stroke 
 let fwVersion = null, siteFw = null, otaLast = null, otaBusy = false;
 
 // ------------------------------------------------------------ GATT plumbing
-// Chrome rejects overlapping GATT operations, so everything goes through one chain.
+// Chrome rejects overlapping GATT operations, so everything goes through one
+// chain. Each operation gets a deadline: one that never settles (link
+// trouble) would otherwise hold up every later write until a page reload.
+const GATT_TIMEOUT_MS = 5000;
 let chain = Promise.resolve();
 function gatt(fn) {
-  const p = chain.then(fn);
+  const p = chain.then(() => Promise.race([
+    fn(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Bluetooth operation timed out')), GATT_TIMEOUT_MS)),
+  ]));
   chain = p.catch(() => {});
   return p;
 }
@@ -349,11 +357,24 @@ $('langBtn').addEventListener('click', () => {
 });
 
 // ------------------------------------------------------------ connection
-async function connect(dev) {
+// Chrome hands back the SAME characteristic objects after a reconnect, so a
+// listener added on every connect piles up (each status was handled once per
+// reconnect so far). Named handlers + remove-before-add keep exactly one.
+const onStatusEvt = e => onStatus(e.target.value);
+const onStatsEvt = e => onStats(e.target.value);
+const onOtaEvt = e => { const r = parseOta(e.target.value); if (r) otaLast = r; };
+function listen(c, fn) {
+  c.removeEventListener('characteristicvaluechanged', fn);
+  c.addEventListener('characteristicvaluechanged', fn);
+}
+
+// quiet: a retry attempt - on failure keep the link attempt open and the UI
+// as is (connectWithin decides when to give up).
+async function connect(dev, quiet = false) {
   device = dev;
   userDisconnect = false;
   setConn('busy');
-  setHint(null);
+  if (!quiet) setHint(null);
   dev.removeEventListener('gattserverdisconnected', onDisconnected);
   dev.addEventListener('gattserverdisconnected', onDisconnected);
   try {
@@ -373,18 +394,18 @@ async function connect(dev) {
       fwVersion = new TextDecoder().decode(await (await svc.getCharacteristic(CHR_INFO)).readValue());
     } catch { fwVersion = null; }
     if (chr.ota) {
-      chr.ota.addEventListener('characteristicvaluechanged', e => { const r = parseOta(e.target.value); if (r) otaLast = r; });
+      listen(chr.ota, onOtaEvt);
       await chr.ota.startNotifications();
     }
     if (chr.manual) decodeManual(await chr.manual.readValue());
     $('manualMotion').hidden = !chr.manual;
     decodeAuto(await chr.auto.readValue());
     setDirty(false);
-    chr.status.addEventListener('characteristicvaluechanged', e => onStatus(e.target.value));
+    listen(chr.status, onStatusEvt);
     await chr.status.startNotifications();
     await sendTime();   // the device has no clock; the stats windows need one
     if (chr.stats) {
-      chr.stats.addEventListener('characteristicvaluechanged', e => onStats(e.target.value));
+      listen(chr.stats, onStatsEvt);
       await chr.stats.startNotifications();
       onStats(await chr.stats.readValue());
     }
@@ -396,6 +417,7 @@ async function connect(dev) {
   } catch (e) {
     console.error(e);
     chr = {};
+    if (quiet) throw e;
     setConn('off');
     setHint('hintFail', dev.name || NAME_PREFIX, e.message);
     try { dev.gatt.disconnect(); } catch {}
@@ -471,18 +493,74 @@ async function connectRemembered(dev) {
   } catch { return false; }
 }
 
+// Connect within `ms`. Attempts are capped at 1.5 s and retried without
+// closing in between: right after a link closes, the OS may hand back the old,
+// dying link once (measured on Windows: "GATT Server is disconnected").
+async function connectWithin(dev, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    let timer;
+    try {
+      const cap = Math.min(1500, Math.max(0, deadline - Date.now()));
+      await Promise.race([connect(dev, true), new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), cap); })]);
+      return true;
+    } catch {
+      // try again
+    } finally {
+      clearTimeout(timer);
+    }
+    await sleep(150);
+  }
+  userDisconnect = true;   // our own cancel: no auto-reconnect loop
+  try { dev.gatt.disconnect(); } catch {}
+  setConn('off');
+  return false;
+}
+
+// Disconnect by asking the board to close the link. When the phone/PC closes
+// it instead, its stack keeps the old link for a few seconds and a quick
+// reconnect fails (measured: ~4 s vs ~1.3 s). Falls back to closing it here.
+async function disconnectNow() {
+  userDisconnect = true;
+  const dev = device;
+  if (!dev || !dev.gatt.connected) return;
+  const gone = new Promise(res => dev.addEventListener('gattserverdisconnected', () => res(true), { once: true }));
+  try { await sendCmd([CMD_DROP_LINK]); } catch {}
+  if (!await Promise.race([gone, sleep(1500).then(() => false)])) {
+    try { dev.gatt.disconnect(); } catch {}
+  }
+}
+
+let chooseNext = false;   // the last device didn't answer: the next tap opens the list
+
 ui.connectBtn.addEventListener('click', async () => {
   if (device && device.gatt.connected) {
-    userDisconnect = true;
-    device.gatt.disconnect();
+    ui.connectBtn.disabled = true;
+    await disconnectNow();
+    ui.connectBtn.disabled = false;
     return;
   }
   try {
-    // A tap always opens the chooser (unless a remembered device is picked in
-    // the list): the browser only allows it right after the tap.
     const sel = ui.deviceSelect;
-    if (!sel.hidden && sel.value !== 'scan') await connect(remembered[+sel.value]);
-    else await scanAndConnect();
+    if (!sel.hidden && sel.value !== 'scan') {
+      await connect(remembered[+sel.value]);
+      return;
+    }
+    // Straight back to the device used last (the one just disconnected, or the
+    // one Chrome remembers) - no list. The list is only the fallback: the
+    // browser allows opening it for ~5 s after the tap, so try for 4 s.
+    const last = device || lastRemembered();
+    if (last && !chooseNext) {
+      if (await connectWithin(last, 4000)) return;
+      setConn('off');
+      if (!(navigator.userActivation && navigator.userActivation.isActive)) {
+        chooseNext = true;
+        setHint('hintTapToChoose', last.name || NAME_PREFIX);
+        return;
+      }
+    }
+    chooseNext = false;
+    await scanAndConnect();
   } catch (e) {
     if (e.name !== 'NotFoundError') setHint('hintFail', NAME_PREFIX, e.message);   // NotFoundError = chooser cancelled
     setConn('off');

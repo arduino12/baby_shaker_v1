@@ -198,6 +198,11 @@ bool stalled(uint32_t nowMs) {
 
 float stallModel() { return s_modelDeg; }
 
+void resync() {
+  s_histN = 0;
+  if (s_running) resetStallModel();
+}
+
 // Blocking ramp to `to` at `dps` (calibration only).
 static void glide(float to, float dps) {
   const float stepDeg = dps * 0.02f;

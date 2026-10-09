@@ -44,6 +44,7 @@ static bool         g_stalled = false;    // last stop was a stall (cleared by t
 static bool         g_calibrating = false;
 static uint32_t     g_lastStatsMs = 0;
 static uint32_t     g_restSinceMs = 0;   // pending change: when the command came to rest
+static struct { uint32_t ticks = 0, late = 0, maxGap = 0; } g_loopStats;   // control loop health
 static bool         g_trace = false;     // serial: stream position at 50 Hz
 static bool         g_restartAt = false;
 static uint32_t     g_restartMs = 0;
@@ -306,6 +307,12 @@ static void handleSerial(uint32_t now) {
     else if (line == "cal") calibrate(now);
     else if (line == "version") Serial.printf("firmware %s, built " __DATE__ " " __TIME__ "\n", FW_VERSION);
     else if (line.startsWith("trace")) g_trace = line.substring(5).toInt() != 0 || line == "trace";
+    else if (line == "loop") {
+      Serial.printf("loop: %lu ticks, %lu late, longest gap %lu ms (since boot or last 'loop')\n",
+                    (unsigned long)g_loopStats.ticks, (unsigned long)g_loopStats.late, (unsigned long)g_loopStats.maxGap);
+      g_loopStats.late = 0;
+      g_loopStats.maxGap = 0;
+    }
     else if (line == "stats") {
       const stats::Summary s = stats::summary();
       Serial.printf("stats (time %s): 24h %lu x / %lu s, 30d %lu x / %lu s, all %lu x / %lu s\n",
@@ -327,7 +334,7 @@ static void handleSerial(uint32_t now) {
       for (int i = 0; i < CAL_POINTS; i++) Serial.printf(" %u", k.mv[i]);
       Serial.println();
     }
-    else if (line.length()) Serial.println("? off | man [deg] | auto [1-4] | set p v a t h d | mset p v a | save | cal | calinfo | stats [reset 0-2] | time <epoch> | status | version | trace [0|1]");
+    else if (line.length()) Serial.println("? off | man [deg] | auto [1-4] | set p v a t h d | mset p v a | save | cal | calinfo | stats [reset 0-2] | time <epoch> | status | version | trace [0|1] | loop");
     line = "";
   }
 }
@@ -341,11 +348,20 @@ static void watchPot(uint32_t now) {
   if (!servo::measure(deg)) {
     lastDeg = -1;
   } else {
+    static uint32_t lastLogMs = 0, suppressed = 0;
     if (lastDeg >= 0 && now > lastMs) {
       const float dps = fabsf(deg - lastDeg) / ((now - lastMs) / 1000.0f);
-      if (dps > POT_JUMP_DPS)
-        Serial.printf("[jump] pot %.1f -> %.1f deg in %lu ms (mode %s, command %.1f)\n", lastDeg, deg,
-                      (unsigned long)(now - lastMs), modeName(g_mode), servo::written());
+      if (dps > POT_JUMP_DPS) {
+        if (now - lastLogMs < 1000) {   // at most one line a second
+          suppressed++;
+        } else {
+          Serial.printf("[jump] pot %.1f -> %.1f deg in %lu ms (mode %s, command %.1f)%s\n", lastDeg, deg,
+                        (unsigned long)(now - lastMs), modeName(g_mode), servo::written(),
+                        suppressed ? " (+more)" : "");
+          lastLogMs = now;
+          suppressed = 0;
+        }
+      }
     }
     lastDeg = deg;
     lastMs = now;
@@ -364,6 +380,11 @@ static int logToSerial(const char *fmt, va_list args) {
 
 void setup() {
   Serial.begin(115200);
+  // With USB plugged into a computer that isn't reading the port, the core
+  // waits up to 20 x this timeout on EVERY print - 2 s at the default 100 ms.
+  // That froze the control loop (coarse motion, false stalls, rare status).
+  // 0: a full buffer just drops the text; the controller never waits on it.
+  Serial.setTxTimeoutMs(0);
   esp_log_set_vprintf(logToSerial);
   // 80 MHz is the lowest clock BLE runs at - plenty for a 50 Hz control loop.
   setCpuFrequencyMhz(80);
@@ -397,6 +418,7 @@ void loop() {
     if (in.cmd == ble::CMD_OTA_BEGIN) otaBegin(arg32, now);
     if (in.cmd == ble::CMD_OTA_END) otaEnd();
     if (in.cmd == ble::CMD_OTA_ABORT) ota::abort();
+    if (in.cmd == ble::CMD_DROP_LINK) ble::dropLinks();
   }
   if (g_restartAt && millis() - g_restartMs > 800) {   // let the DONE report go out first
     Serial.println("[ota] restarting");
@@ -406,9 +428,25 @@ void loop() {
   handleSerial(now);
 
   if (now - lastTick >= CONTROL_PERIOD_MS) {
+    const uint32_t gap = now - lastTick;
     lastTick = now;
+    // A late tick (something blocked the loop) makes the filtered pot and the
+    // stall model stale - restart both instead of judging the arm by them.
+    const bool late = gap > 3 * CONTROL_PERIOD_MS && g_loopStats.ticks > 0;
+    g_loopStats.ticks++;
+    if (gap > g_loopStats.maxGap && g_loopStats.ticks > 1) g_loopStats.maxGap = gap;
+    if (late) {
+      g_loopStats.late++;
+      servo::resync();
+      static uint32_t lastLateLog = 0;
+      if (now - lastLateLog > 1000) {
+        Serial.printf("[loop] control tick %lu ms late (%lu late ticks so far)\n",
+                      (unsigned long)(gap - CONTROL_PERIOD_MS), (unsigned long)g_loopStats.late);
+        lastLateLog = now;
+      }
+    }
     servo::sample();
-    if (servo::running() && servo::stalled(now)) {
+    if (!late && servo::running() && servo::stalled(now)) {
       onStall(now);
     } else if (g_pending.active && commandAtRest()) {
       // Motion finished: hold still (no new stroke) until the pot confirms.

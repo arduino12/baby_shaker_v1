@@ -29,8 +29,12 @@ Local test on a PC: `cd app && python -m http.server 8000` → open
 Connecting: tap **Connect** and pick "Baby Shaker XXXX" in the browser's chooser. To have the
 page connect to the last device by itself when it opens, Chrome needs two flags (the page shows
 this tip when they are off): in `chrome://flags` enable *Experimental Web Platform features*
-and *Use the new permissions backend for Web Bluetooth*. If several shakers are remembered, a
-dropdown appears. The Connect button is also the status: green = Connect,
+and *Use the new permissions backend for Web Bluetooth*. After **Disconnect**, **Connect** goes
+straight back to the same device (no list, ~1.3 s); the list opens only if it doesn't answer.
+Disconnect asks the board to close the link (`CMD_DROP_LINK`): when the phone/PC closes it
+instead, its Bluetooth stack keeps the old link for a few seconds and a quick reconnect fails
+(measured on Windows: ~4 s and one failed attempt, vs ~1.3 s). If several shakers are
+remembered, a dropdown appears. The Connect button is also the status: green = Connect,
 orange = connecting, red = Disconnect.
 
 The footer shows the app and firmware versions. Every file is revalidated with the server on
@@ -169,7 +173,13 @@ pio device monitor
 Serial commands: `off`, `man` (enter Manual where the arm is), `man <deg>`, `auto [1-4]`,
 `set <profile> <speed> <accel> <travel> <hold×0.1s> <min>`, `mset <profile> <speed> <accel>` (Manual),
 `save`, `cal`, `calinfo`,
-`stats`, `stats reset <0|1|2>`, `time <epoch>`, `status`, `version`, `trace [0|1]`.
+`stats`, `stats reset <0|1|2>`, `time <epoch>`, `status`, `version`, `trace [0|1]`, `loop`.
+
+Serial output never waits (`Serial.setTxTimeoutMs(0)`): with USB plugged into a computer that
+isn't reading the port, the core otherwise blocks up to 2 s on every print, which froze the
+control loop (coarse motion, false stalls, slow status). A control tick arriving > 60 ms late
+is logged as `[loop]` and skips stall detection; `loop` prints the late-tick count and the
+longest gap.
 
 Diagnostics on the serial log: every mode change prints the angle it starts from and how long
 it took; `[jump] command …` flags a commanded step > `STEP_WARN_DEG` in one 20 ms tick, and
@@ -191,7 +201,7 @@ Service `8f1d0001-5b7a-4c2e-9d3b-6a1f2e3c4b5a`, all little-endian:
 | Manual params | `…0009` | R/W | u8 profile, u8 0, u16 speed, u16 accel (saved 2 s after the last change) |
 | Auto params | `…0004` | R/W | active set (live, not saved): u8 profile, u8 0, u16 speed, u16 accel, u16 travel, u16 hold×10, u16 duration min |
 | Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback, bit1 = stopped by a stall, bit2 = calibrating), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3, u8 pending mode (mode \| button << 4, 0xFF = none) |
-| Command | `…0006` | W | u8 command + args: `01` calibrate, `02` save the active set into the active Auto button, `03 w` reset stats (w: 0 = 24 h, 1 = 30 days, 2 = all time), `04 t0..t3` set time (u32 epoch s), `05 s0..s3` OTA begin (image size), `06` OTA end (verify, switch, restart), `07` OTA abort |
+| Command | `…0006` | W | u8 command + args: `01` calibrate, `02` save the active set into the active Auto button, `03 w` reset stats (w: 0 = 24 h, 1 = 30 days, 2 = all time), `04 t0..t3` set time (u32 epoch s), `05 s0..s3` OTA begin (image size), `06` OTA end (verify, switch, restart), `07` OTA abort, `08` close the link (the app's Disconnect) |
 | OTA | `…000a` | R/W/W-no-rsp/N | write: u32 offset + data (≤ MTU - 7). read/notify (every 4 KB): u8 state (0 idle, 1 ready, 2 receiving, 3 done, 4 failed), u8 error, u16 MTU, u32 size, u32 received |
 | Info | `…000b` | R | firmware version string |
 | Stats | `…0008` | R/N | 6 × u32: 24 h count, 24 h seconds, 30 d count, 30 d seconds, all-time count, all-time seconds (0xFFFFFFFF = time not known yet) |

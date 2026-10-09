@@ -3,7 +3,7 @@
 // release - GitHub Pages lets browsers cache files for 10 minutes, which once
 // mixed an old app.js with a new index.html. The cache is only the offline
 // fallback (e.g. on a walk with no signal).
-const CACHE = 'baby-shaker-1.5.0';
+const CACHE = 'baby-shaker-1.5.1';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', e => {

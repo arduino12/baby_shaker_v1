@@ -190,6 +190,13 @@ void publishOta() {
   if (s_connected) s_otaChr->notify((const uint8_t *)&r, sizeof(r));
 }
 
+// The app's Disconnect asks the board to close the link: when the phone/PC
+// closes it, its Bluetooth stack keeps the old link around for a few seconds
+// and a reconnect in that window fails.
+void dropLinks() {
+  for (uint16_t h : s_server->getPeerDevices()) s_server->disconnect(h);
+}
+
 void fastLink() {
   if (s_conn != BLE_HS_CONN_HANDLE_NONE) s_server->updateConnParams(s_conn, 6, 12, 0, 400);   // 7.5-15 ms
 }

@@ -18,6 +18,7 @@ enum Cmd : uint8_t {
   CMD_OTA_BEGIN = 5,     // u32 image size
   CMD_OTA_END = 6,       // no args: verify, switch boot partition, restart
   CMD_OTA_ABORT = 7,     // no args
+  CMD_DROP_LINK = 8,     // no args: the board closes the link (a clean, fast disconnect)
 };
 constexpr uint8_t NO_SLOT = 0xFF;
 
@@ -47,5 +48,6 @@ void        publishStatus(const Status &s);
 void        publishStats(const stats::Summary &s);
 void        publishOta();
 void        fastLink();              // shortest connection interval (OTA)
+void        dropLinks();             // close every link (CMD_DROP_LINK)
 
 }  // namespace ble

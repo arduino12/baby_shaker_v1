@@ -36,6 +36,9 @@ const PotCal &calibration();
 // Call every control tick while running; true once the motor is judged stalled.
 bool  stalled(uint32_t nowMs);
 float stallModel();               // where the slow reference servo is (diagnostics)
+// After the loop was held up: drop the (now stale) pot history and restart the
+// stall model from the current reading.
+void  resync();
 
 // Sweeps 0..max, records the pot table, noise and top speed. Blocks ~20 s.
 // Gentle ramps to the start and back; the two timing moves are full speed by
