@@ -49,5 +49,6 @@ void        publishStats(const stats::Summary &s);
 void        publishOta();
 void        fastLink();              // shortest connection interval (OTA)
 void        dropLinks();             // close every link (CMD_DROP_LINK)
+int8_t      linkRssi();              // dBm of the newest link, 127 = none
 
 }  // namespace ble

@@ -127,6 +127,7 @@ static void sendStatus(uint32_t now) {
   s.remainingS = remainingS(now);
   s.slot = g_slot;
   s.pending = g_pending.active ? (uint8_t)(g_pending.mode | g_pending.slot << 4) : 0xFF;
+  s.rssi = ble::linkRssi();
   ble::publishStatus(s);
   g_lastStatusMs = now;
 }
@@ -328,6 +329,7 @@ static void handleSerial(uint32_t now) {
                     servo::feedbackValid(), ble::connected(), g_auto.profile, g_auto.speed,
                     g_auto.accel, g_auto.travel, g_auto.holdDs / 10.0f, g_auto.durationMin,
                     remainingS(now), g_manual.profile, g_manual.speed, g_manual.accel);
+    else if (line == "rssi") Serial.printf("link rssi %d dBm\n", ble::linkRssi());
     else if (line == "calinfo") {
       const PotCal &k = servo::calibration();
       Serial.printf("cal valid=%u top speed=%u deg/s noise=%u mV table(mV):", k.valid, k.maxSpeedDps, k.noiseMv);

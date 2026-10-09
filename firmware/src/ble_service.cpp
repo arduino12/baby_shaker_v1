@@ -197,6 +197,12 @@ void dropLinks() {
   for (uint16_t h : s_server->getPeerDevices()) s_server->disconnect(h);
 }
 
+int8_t linkRssi() {
+  int8_t rssi;
+  if (!s_connected || s_conn == BLE_HS_CONN_HANDLE_NONE || ble_gap_conn_rssi(s_conn, &rssi) != 0) return 127;
+  return rssi;
+}
+
 void fastLink() {
   if (s_conn != BLE_HS_CONN_HANDLE_NONE) s_server->updateConnParams(s_conn, 6, 12, 0, 400);   // 7.5-15 ms
 }

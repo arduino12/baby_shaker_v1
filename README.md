@@ -37,6 +37,11 @@ instead, its Bluetooth stack keeps the old link for a few seconds and a quick re
 remembered, a dropdown appears. The Connect button is also the status: green = Connect,
 orange = connecting, red = Disconnect.
 
+Under the status tiles the app shows the **signal** in both directions: how strongly the device
+hears the phone (measured on the board, always available) and how strongly the phone hears the
+device (from its advertisements; needs the Chrome flags above). Each is the median of the last 8
+readings - single packets swing by ~20 dB. Bars: ≥ −60 dBm 4, −70 3, −80 2, −90 1.
+
 The footer shows the app and firmware versions. Every file is revalidated with the server on
 load (service worker, `cache: 'no-cache'`), so a page never mixes files from two releases.
 
@@ -83,14 +88,19 @@ show "—" until a phone has connected since power-up (all-time always counts).
 
 | Signal | C3 pin | Notes |
 |---|---|---|
-| 5 V rail sense | GPIO0 | 100k/100k divider |
-| Servo power switch | GPIO1 | Gate of a logic-level N-MOS switching servo GND; 100k gate pulldown |
+| 5 V rail sense | GPIO0 | 100 kΩ from 5 V + 100 kΩ to GND (1 %), 100 nF from GPIO0 to GND |
+| Servo power switch | GPIO1 | Logic-level N-MOS (e.g. AO3400A): GPIO1 → 100 Ω → gate, 100 kΩ gate → GND, drain → servo GND wire, source → GND |
 | Servo pot wiper | GPIO3 | **Through a divider** (e.g. 10k/10k) - the pot swings up to 5 V |
 | Servo signal | GPIO4 | 50 Hz PWM |
 | Status LED | GPIO8 | SuperMini's built-in blue LED, active low (`LED_ACTIVE_LOW`) |
 
 Pins, the servo pulse range (`SERVO_MIN_US`, `SERVO_MAX_US`) and the angle range
 (`SERVO_MAX_DEG`) are all in [firmware/src/config.h](firmware/src/config.h).
+
+N-MOS: it must switch fully on at 3.3 V gate drive and carry the servo's stall current (2.5-3 A):
+AO3400A (SOT-23, ~40 mΩ at 2.5 V) or IRLML6344; avoid SI2302 (2.5 A max) and non-logic-level parts
+(IRF540 etc.). The 100 kΩ pulldown keeps the servo off while the C3 boots. Its Rds(on) lifts the
+servo ground by I × R under load (2 A × 40 mΩ = 80 mV ≈ 4° on the pot reading).
 
 `SERVO_POWER_SWITCHED` in config.h says whether the N-MOS is fitted (default `false`: the servo
 is always powered). It changes how the servo is started - see "Switching the servo on and off".
@@ -190,6 +200,14 @@ it took; `[jump] command …` flags a commanded step > `STEP_WARN_DEG` in one 20
 testing from a PC whose Bluetooth stack has cached a stale GATT table for the real address
 (Windows does), including an OTA update back to the release build.
 
+### Antenna check
+
+The C3 SuperMini's chip antenna is often poorly matched. To compare modules, flash
+`tools/rssi_beacon` (PlatformIO project) on each, place them at the same distance from the PC and
+run `python tools/rssi_compare.py COM5 COM6 ...`: the PC's RSSI of each module (how well it
+transmits) and a module-to-module matrix (how well each receives). Swap two modules' places
+and run again to separate the antenna from its position.
+
 ### BLE protocol
 
 Service `8f1d0001-5b7a-4c2e-9d3b-6a1f2e3c4b5a`, all little-endian:
@@ -200,7 +218,7 @@ Service `8f1d0001-5b7a-4c2e-9d3b-6a1f2e3c4b5a`, all little-endian:
 | Position | `…0003` | W / W-no-rsp | u16 angle ×10 (switches to Manual) |
 | Manual params | `…0009` | R/W | u8 profile, u8 0, u16 speed, u16 accel (saved 2 s after the last change) |
 | Auto params | `…0004` | R/W | active set (live, not saved): u8 profile, u8 0, u16 speed, u16 accel, u16 travel, u16 hold×10, u16 duration min |
-| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback, bit1 = stopped by a stall, bit2 = calibrating), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3, u8 pending mode (mode \| button << 4, 0xFF = none) |
+| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback, bit1 = stopped by a stall, bit2 = calibrating), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3, u8 pending mode (mode \| button << 4, 0xFF = none), i8 link RSSI dBm (127 = unknown) |
 | Command | `…0006` | W | u8 command + args: `01` calibrate, `02` save the active set into the active Auto button, `03 w` reset stats (w: 0 = 24 h, 1 = 30 days, 2 = all time), `04 t0..t3` set time (u32 epoch s), `05 s0..s3` OTA begin (image size), `06` OTA end (verify, switch, restart), `07` OTA abort, `08` close the link (the app's Disconnect) |
 | OTA | `…000a` | R/W/W-no-rsp/N | write: u32 offset + data (≤ MTU - 7). read/notify (every 4 KB): u8 state (0 idle, 1 ready, 2 receiving, 3 done, 4 failed), u8 error, u16 MTU, u32 size, u32 received |
 | Info | `…000b` | R | firmware version string |

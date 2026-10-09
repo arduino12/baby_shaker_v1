@@ -13,7 +13,7 @@ const CHR_MANUAL  = '8f1d0009-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_OTA     = '8f1d000a-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const CHR_INFO    = '8f1d000b-5b7a-4c2e-9d3b-6a1f2e3c4b5a';
 const NAME_PREFIX = 'Baby Shaker';
-const APP_VERSION = '1.5.1';   // keep in step with index.html (?v=) and sw.js
+const APP_VERSION = '1.5.2';   // keep in step with index.html (?v=) and sw.js
 const MODE_OFF = 0, MODE_MANUAL = 1, MODE_AUTO = 2;
 const CMD_CALIBRATE = 1, CMD_SAVE_SLOT = 2, CMD_RESET_STATS = 3, CMD_SET_TIME = 4;
 const CMD_OTA_BEGIN = 5, CMD_OTA_END = 6, CMD_OTA_ABORT = 7, CMD_DROP_LINK = 8;
@@ -52,6 +52,7 @@ const STR = {
     hintNoBt: 'This browser has no Web Bluetooth. Use Chrome (Android / Windows / Mac) or Bluefy (iPhone).',
     credit: 'By Arad & Claud 2026 ©',
     versions: 'App {0} · Firmware {1}',
+    signal: 'Signal', sigBoard: 'device hears phone {0}', sigPhone: 'phone hears device {0}',
     fwTitle: 'Firmware update', fwAvailable: 'Version {0} is available (this device has {1}).',
     fwUpdate: 'Update firmware', fwConfirm: 'Update the firmware to {0}? The motor stops during the update (about a minute). Keep the phone close to the device.',
     fwDownload: 'Downloading…', fwProgress: 'Sending… {0}% ({1} KB/s)', fwVerify: 'Verifying…',
@@ -88,6 +89,7 @@ const STR = {
     resetConfirm: 'לאפס את "{0}"?',
     credit: 'מאת ארד וקלוד 2026 ©',
     versions: 'אפליקציה {0} · קושחה {1}',
+    signal: 'קליטה', sigBoard: 'המכשיר קולט את הטלפון {0}', sigPhone: 'הטלפון קולט את המכשיר {0}',
     fwTitle: 'עדכון קושחה', fwAvailable: 'גרסה {0} זמינה (במכשיר גרסה {1}).',
     fwUpdate: 'עדכון קושחה', fwConfirm: 'לעדכן את הקושחה לגרסה {0}? המנוע ייעצר במהלך העדכון (כדקה). השאירו את הטלפון קרוב למכשיר.',
     fwDownload: 'מוריד…', fwProgress: 'שולח… {0}% ({1} KB/s)', fwVerify: 'מאמת…',
@@ -125,6 +127,17 @@ let dirty = false;                 // sliders edited since the slot was loaded/s
 let lastStats = null;
 let pending = null;                // {m, s}: requested, waiting for the stroke to end (device-reported)
 let fwVersion = null, siteFw = null, otaLast = null, otaBusy = false;
+let rssiBoard = null, rssiPhone = null, rssiPhoneAt = 0, advWatch = null;
+// RSSI swings 20 dB packet to packet (fading, channel hopping): show the median
+// of the last 8 readings in each direction.
+const rssiHist = { board: [], phone: [] };
+function smoothRssi(kind, v) {
+  const h = rssiHist[kind];
+  h.push(v);
+  if (h.length > 8) h.shift();
+  const s = [...h].sort((a, b) => a - b);
+  return s[s.length >> 1];
+}
 
 // ------------------------------------------------------------ GATT plumbing
 // Chrome rejects overlapping GATT operations, so everything goes through one
@@ -294,6 +307,9 @@ function onStatus(dv) {
   const want = calibrating ? 'hintCalibrating' : stall ? 'hintStall' : null;
   if (want && hint?.key !== want) setHint(want);
   else if (!want && (hint?.key === 'hintStall' || hint?.key === 'hintCalibrating')) setHint(null);
+  const r = dv.byteLength > 12 ? dv.getInt8(12) : 127;
+  if (r !== 127) rssiBoard = smoothRssi('board', r);
+  showSignal();
   const p = dv.byteLength > 11 ? dv.getUint8(11) : 0xFF;
   pending = p === 0xFF ? null : { m: p & 15, s: p >> 4 };
   showMode(m, s);
@@ -412,6 +428,7 @@ async function connect(dev, quiet = false) {
     setConn('on');
     onStatus(await chr.status.readValue());
     try { localStorage.setItem('lastDevice', dev.name || ''); } catch {}
+    watchSignal(dev);
     showVersions();
     checkFirmware();
   } catch (e) {
@@ -427,7 +444,11 @@ async function connect(dev, quiet = false) {
 
 async function onDisconnected() {
   chr = {};
+  rssiBoard = rssiPhone = null;
+  rssiHist.board = [];
+  rssiHist.phone = [];
   showFirmwareCard();
+  showSignal();
   posBusy = false; posPending = null;
   setConn('off');
   if (userDisconnect || !device) return;
@@ -687,6 +708,47 @@ document.querySelectorAll('[data-reset]').forEach(el => onLongPress(el, () => {
   if (confirm(t('resetConfirm', name))) sendCmd([CMD_RESET_STATS, which]).catch(e => console.warn('reset', e));
 }));
 
+// ------------------------------------------------------------ signal strength
+// Both directions: the board measures the link (status), and - with the Chrome
+// flags - the phone measures the board's advertisements, which it keeps
+// sending while connected. A badly matched antenna shows up in both.
+function bars(dbm) {
+  return dbm == null ? 0 : dbm >= -60 ? 4 : dbm >= -70 ? 3 : dbm >= -80 ? 2 : dbm >= -90 ? 1 : 0;
+}
+
+function showSignal() {
+  const phone = rssiPhone != null && Date.now() - rssiPhoneAt < 6000 ? rssiPhone : null;
+  const worst = [rssiBoard, phone].filter(v => v != null);
+  const el = $('signal');
+  el.hidden = connState !== 'on' || !worst.length;
+  if (el.hidden) return;
+  const n = bars(Math.min(...worst));
+  $('sigBars').innerHTML = [1, 2, 3, 4].map(i => `<i class="${i <= n ? 'on' : ''}" style="height:${i * 25}%"></i>`).join('');
+  $('sigBars').className = 'bars q' + n;
+  const parts = [];
+  if (rssiBoard != null) parts.push(t('sigBoard', `${rssiBoard} dBm`));
+  if (phone != null) parts.push(t('sigPhone', `${phone} dBm`));
+  $('sigText').textContent = parts.join(' · ');
+}
+
+const onAdvert = e => {
+  if (e.rssi == null) return;
+  rssiPhone = smoothRssi('phone', e.rssi);
+  rssiPhoneAt = Date.now();
+  showSignal();
+};
+
+async function watchSignal(dev) {
+  if (!dev.watchAdvertisements) return;
+  try {
+    if (advWatch) advWatch.abort();
+    advWatch = new AbortController();
+    dev.removeEventListener('advertisementreceived', onAdvert);
+    dev.addEventListener('advertisementreceived', onAdvert);
+    await dev.watchAdvertisements({ signal: advWatch.signal });
+  } catch (e) { console.warn('watchAdvertisements', e); }
+}
+
 // ------------------------------------------------------------ firmware update
 function showVersions() {
   $('versions').textContent = t('versions', APP_VERSION, fwVersion || '—');
@@ -820,7 +882,8 @@ function demo(m) {
   setConn('on');
   decodeAuto(new DataView(new Uint8Array([2, 0, 90, 0, 44, 1, 60, 0, 5, 0, 30, 0]).buffer));
   decodeManual(new DataView(new Uint8Array([2, 0, 90, 0, 44, 1]).buffer));
-  const s = new DataView(new ArrayBuffer(12));
+  const s = new DataView(new ArrayBuffer(13));
+  s.setInt8(12, -58);
   s.setUint8(0, m); s.setUint16(2, 5040, true); s.setUint16(4, 1123, true);
   s.setUint16(6, 1123, true); s.setUint16(8, m === MODE_AUTO ? 1754 : 47, true); s.setUint8(10, 1);
   if (location.hash.endsWith('-pending')) s.setUint8(11, MODE_AUTO | 2 << 4); else s.setUint8(11, 0xFF);

@@ -22,7 +22,7 @@ struct __attribute__((packed)) AutoParams {   // 12 bytes
   uint16_t durationMin;  // minutes, 0..120 (0 = no limit)
 };
 
-struct __attribute__((packed)) Status {       // 12 bytes
+struct __attribute__((packed)) Status {       // 13 bytes
   uint8_t  mode;         // Mode
   uint8_t  flags;        // bit0: pot feedback valid, bit1: stopped because the motor stalled, bit2: calibrating
   uint16_t vbatMv;
@@ -31,6 +31,7 @@ struct __attribute__((packed)) Status {       // 12 bytes
   uint16_t remainingS;   // auto: seconds until Off (0xFFFF = no limit); manual: until timeout
   uint8_t  slot;         // active auto slot, 0..3
   uint8_t  pending;      // requested mode waiting for the stroke to end: mode | slot << 4; 0xFF = none
+  int8_t   rssi;         // how strongly the board hears the phone, dBm (127 = unknown)
 };
 
 // Pot feedback calibration: pot voltage at CAL_POINTS evenly spaced angles

@@ -111,3 +111,12 @@ footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 20
   display: flex; flex-direction: column; gap: 4px; }
 footer .versions { font-size: .75rem; opacity: .8; }
 progress { width: 100%; height: 10px; accent-color: var(--accent); }
+
+.signal { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: -4px; }
+.signal .label { display: inline; }
+.sig-text { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.bars i { display: block; width: 4px; background: var(--line); border-radius: 1px; }
+.bars.q4 i.on, .bars.q3 i.on { background: var(--ok); }
+.bars.q2 i.on { background: var(--warn); }
+.bars.q1 i.on, .bars.q0 i.on { background: var(--red); }

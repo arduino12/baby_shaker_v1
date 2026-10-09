@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="style.css?v=1.5.1">
+  <link rel="stylesheet" href="style.css?v=1.5.2">
 </head>
 <body>
   <header>
@@ -34,6 +34,11 @@
         <div><span class="label" data-i18n="battery">Battery</span><span id="stVbat" class="value" dir="ltr">—</span></div>
         <div id="posTile" class="pressable"><span class="label" data-i18n="position">Position</span><span id="stPos" class="value" dir="ltr">—</span></div>
         <div><span class="label" data-i18n="remaining">Remaining</span><span id="stRemain" class="value" dir="ltr">—</span></div>
+      </div>
+      <div id="signal" class="signal" hidden>
+        <span id="sigBars" class="bars"></span>
+        <span class="label" data-i18n="signal">Signal</span>
+        <span id="sigText" class="sig-text"></span>
       </div>
       <div class="modes" role="group" aria-label="Mode">
         <button class="wide" data-mode="0" data-i18n="off">Off</button>
@@ -128,6 +133,6 @@
     <span id="versions" class="versions"></span>
   </footer>
 
-  <script src="app.js?v=1.5.1"></script>
+  <script src="app.js?v=1.5.2"></script>
 </body>
 </html>
