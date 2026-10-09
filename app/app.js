@@ -89,6 +89,7 @@ function setConn(state) {   // 'off' | 'busy' | 'on'
   ui.connState.textContent = { off: 'Disconnected', busy: 'Connecting…', on: device ? device.name : 'Connected' }[state];
   ui.connState.className = 'pill' + (state === 'on' ? ' on' : state === 'busy' ? ' busy' : '');
   ui.connectBtn.textContent = state === 'on' ? 'Disconnect' : 'Connect';
+  ui.connectBtn.classList.toggle('primary', state !== 'on');
   ui.connectBtn.disabled = state === 'busy';
   ui.statusCard.hidden = state !== 'on';
   if (state !== 'on') { ui.manualCard.hidden = ui.autoCard.hidden = true; mode = -1; }
@@ -250,6 +251,18 @@ async function init() {
   }
 }
 
+// #demo, #demo-manual: render the connected UI with fake status (layout checks, no device).
+function demo(m) {
+  setConn('on');
+  ui.connState.textContent = 'Baby Shaker DEMO';
+  decodeAuto(new DataView(new Uint8Array([2, 0, 90, 0, 44, 1, 60, 0, 5, 0, 30, 0]).buffer));
+  const s = new DataView(new ArrayBuffer(10));
+  s.setUint8(0, m); s.setUint16(2, 5040, true); s.setUint16(4, 1123, true);
+  s.setUint16(6, 1123, true); s.setUint16(8, m === 2 ? 1754 : 47, true);
+  onStatus(s);
+}
+
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 AUTO_SLIDERS.forEach(updateLabel);
-init();
+if (location.hash.startsWith('#demo')) demo(location.hash === '#demo-manual' ? 1 : 2);
+else init();
