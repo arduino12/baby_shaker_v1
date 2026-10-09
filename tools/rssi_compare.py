@@ -36,13 +36,29 @@ stop = threading.Event()
 t_start = time.time()
 
 
+drops = {}          # port -> times it dropped off USB during the run
+
+
 def read_port(port):
-    s = serial.Serial()
-    s.port, s.baudrate, s.dtr, s.rts, s.timeout = port, 115200, False, False, 0.2
-    s.open()
-    serials[port] = s
+    s = None
     while not stop.is_set():
-        w = s.readline().decode(errors='replace').split()
+        try:
+            if s is None:   # (re)open: a module that drops off USB (e.g. overheating) may come back
+                s = serial.Serial()
+                s.port, s.baudrate, s.dtr, s.rts, s.timeout = port, 115200, False, False, 0.2
+                s.open()
+                serials[port] = s
+            w = s.readline().decode(errors='replace').split()
+        except (serial.SerialException, OSError):
+            drops[port] = drops.get(port, 0) + 1
+            serials.pop(port, None)
+            try:
+                s.close()
+            except Exception:
+                pass
+            s = None
+            time.sleep(1)
+            continue
         if len(w) >= 8 and w[0] == 'S':
             me, peer = ' '.join(w[1:3]), ' '.join(w[3:-4])
             port_of[me] = port
@@ -54,8 +70,11 @@ def read_port(port):
 
 
 def send_all(cmd):
-    for s in serials.values():
-        s.write((cmd + '\n').encode())
+    for s in list(serials.values()):
+        try:
+            s.write((cmd + '\n').encode())
+        except (serial.SerialException, OSError):
+            pass
 
 
 async def scan(seconds):
@@ -128,3 +147,6 @@ for m in names:
     off = [x[1] for x in v if x[0] >= t_off]
     tail = lambda xs: statistics.mean(xs[-8:]) if xs else float('nan')
     print(f'{label(m):28} {v[0][1]:6.1f} {tail(on):14.1f} {tail(off):15.1f}')
+
+if drops:
+    print('\nDropped off USB during the run:', ', '.join(f'{p} x{n}' for p, n in drops.items()))
