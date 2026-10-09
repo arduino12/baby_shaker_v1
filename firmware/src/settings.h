@@ -8,4 +8,6 @@ AutoParams loadAuto();
 void       saveAuto(const AutoParams &p);   // writes only if changed
 PotCal     loadPotCal();
 void       savePotCal(const PotCal &c);
+Presets    loadPresets();
+void       savePresets(const Presets &p);
 }  // namespace settings

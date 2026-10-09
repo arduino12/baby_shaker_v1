@@ -38,3 +38,21 @@ struct __attribute__((packed)) PotCal {
 };
 
 constexpr AutoParams AUTO_DEFAULTS = {PROFILE_SINUSOIDAL, 0, 90, 300, 60, 5, 30};
+
+// Named auto-mode presets, kept on the device so every phone sees the same list.
+constexpr uint8_t PRESET_MAX      = 8;
+constexpr uint8_t PRESET_NAME_LEN = 32;   // UTF-8 bytes, zero-padded (~16 Hebrew letters)
+
+struct __attribute__((packed)) Preset {   // 44 bytes
+  char       name[PRESET_NAME_LEN];
+  AutoParams params;
+};
+
+struct Presets {
+  uint8_t count = 0;
+  Preset  items[PRESET_MAX];
+};
+
+// Write to the presets characteristic: op, index, then (save only) a Preset.
+enum PresetOp : uint8_t { PRESET_SAVE = 1, PRESET_DELETE = 2 };
+constexpr uint8_t PRESET_NEW = 0xFF;      // save index: append

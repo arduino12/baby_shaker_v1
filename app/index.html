@@ -16,7 +16,10 @@
 <body>
   <header>
     <h1>Baby Shaker <span class="ver">V1</span></h1>
-    <span id="connState" class="pill">Disconnected</span>
+    <div class="header-end">
+      <button id="langBtn" class="lang" data-i18n="langBtn">עברית</button>
+      <span id="connState" class="pill">Disconnected</span>
+    </div>
   </header>
 
   <main>
@@ -30,60 +33,68 @@
 
     <section class="card" id="statusCard" hidden>
       <div class="stats">
-        <div><span class="label">Mode</span><span id="stMode" class="value">—</span></div>
-        <div><span class="label">Battery</span><span id="stVbat" class="value">—</span></div>
-        <div><span class="label">Position</span><span id="stPos" class="value">—</span></div>
-        <div><span class="label">Remaining</span><span id="stRemain" class="value">—</span></div>
+        <div><span class="label" data-i18n="mode">Mode</span><span id="stMode" class="value">—</span></div>
+        <div><span class="label" data-i18n="battery">Battery</span><span id="stVbat" class="value" dir="ltr">—</span></div>
+        <div><span class="label" data-i18n="position">Position</span><span id="stPos" class="value" dir="ltr">—</span></div>
+        <div><span class="label" data-i18n="remaining">Remaining</span><span id="stRemain" class="value" dir="ltr">—</span></div>
       </div>
       <div class="modes" role="group" aria-label="Mode">
-        <button data-mode="0">Off</button>
-        <button data-mode="1">Manual</button>
-        <button data-mode="2">Auto</button>
+        <button data-mode="0" data-i18n="off">Off</button>
+        <button data-mode="1" data-i18n="manual">Manual</button>
+        <button data-mode="2" data-i18n="auto">Auto</button>
       </div>
     </section>
 
     <section class="card" id="manualCard" hidden>
       <label class="slider">
-        <span>Position (degrees): <b id="posVal">135</b></span>
+        <span><span data-i18n="posLabel">Position (degrees):</span> <b id="posVal">135</b></span>
         <input id="pos" type="range" min="0" max="270" step="1" value="135">
       </label>
-      <p class="hint">Returns to Off after 1 minute without movement.</p>
+      <p class="hint" data-i18n="manualHint">Returns to Off after 1 minute without movement.</p>
     </section>
 
     <section class="card" id="autoCard" hidden>
+      <div class="field" id="presetRow">
+        <span data-i18n="preset">Preset:</span>
+        <div class="row">
+          <select id="presetSelect"></select>
+          <button id="presetSave" data-i18n="save">Save</button>
+          <button id="presetDel" data-i18n="del">Delete</button>
+        </div>
+      </div>
       <label class="field">
-        <span>Movement Profile:</span>
+        <span data-i18n="profile">Movement Profile:</span>
         <select id="profile">
-          <option value="0">Trapezoidal</option>
-          <option value="1">S-Curve</option>
-          <option value="2">Sinusoidal</option>
-          <option value="3">Cubical</option>
+          <option value="0" data-i18n="trapezoidal">Trapezoidal</option>
+          <option value="1" data-i18n="scurve">S-Curve</option>
+          <option value="2" data-i18n="sinusoidal">Sinusoidal</option>
+          <option value="3" data-i18n="cubical">Cubical</option>
         </select>
       </label>
       <label class="slider">
-        <span>Speed (degrees/sec): <b id="speedVal"></b></span>
+        <span><span data-i18n="speed">Speed (degrees/sec):</span> <b id="speedVal"></b></span>
         <input id="speed" type="range" min="0" max="360" step="1">
       </label>
       <label class="slider">
-        <span>Acceleration (degrees/sec²): <b id="accelVal"></b></span>
+        <span><span data-i18n="accel">Acceleration (degrees/sec²):</span> <b id="accelVal"></b></span>
         <input id="accel" type="range" min="0" max="1000" step="5">
       </label>
       <label class="slider">
-        <span>Travel (degrees): <b id="travelVal"></b></span>
+        <span><span data-i18n="travel">Travel (degrees):</span> <b id="travelVal"></b></span>
         <input id="travel" type="range" min="10" max="270" step="1">
       </label>
       <label class="slider">
-        <span>Hold Time (sec): <b id="holdVal"></b></span>
+        <span><span data-i18n="hold">Hold Time (sec):</span> <b id="holdVal"></b></span>
         <input id="hold" type="range" min="0" max="20" step="0.1">
       </label>
       <label class="slider">
-        <span>Duration (minutes): <b id="durationVal"></b> <em id="durationRemain"></em></span>
+        <span><span data-i18n="duration">Duration (minutes):</span> <b id="durationVal"></b> <em id="durationRemain"></em></span>
         <input id="duration" type="range" min="0" max="120" step="1">
       </label>
     </section>
   </main>
 
-  <footer>By Arad &amp; Claud 2026 ©</footer>
+  <footer data-i18n="credit">By Arad &amp; Claud 2026 ©</footer>
 
   <script src="app.js"></script>
 </body>

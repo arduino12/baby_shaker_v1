@@ -8,7 +8,7 @@
 namespace ble {
 
 static char                 s_name[24];
-static NimBLECharacteristic *s_modeChr, *s_autoChr, *s_statusChr;
+static NimBLECharacteristic *s_modeChr, *s_autoChr, *s_statusChr, *s_presetsChr;
 static volatile bool        s_connected = false;
 static Inbox                s_inbox;
 static portMUX_TYPE         s_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -20,8 +20,9 @@ class ServerCb : public NimBLEServerCallbacks {
     srv->updateConnParams(info.getConnHandle(), 12, 24, 0, 400);
     Serial.println("[ble] connected");
   }
-  void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int reason) override {
-    s_connected = false;
+  void onDisconnect(NimBLEServer *srv, NimBLEConnInfo &, int reason) override {
+    // The count still includes the link that is going away.
+    s_connected = srv->getConnectedCount() > 1;
     Serial.printf("[ble] disconnected (reason %d)\n", reason);
     // NimBLE restarts advertising on its own (advertiseOnDisconnect).
   }
@@ -43,6 +44,12 @@ class WriteCb : public NimBLECharacteristicCallbacks {
       memcpy(&s_inbox.autoParams, v.data(), sizeof(AutoParams));
     } else if (uuid == NimBLEUUID(BLE_CMD_UUID) && v.size() >= 1) {
       s_inbox.cmd = v[0];
+    } else if (uuid == NimBLEUUID(BLE_PRESETS_UUID) && v.size() >= 2) {
+      s_inbox.hasPresetOp = true;
+      s_inbox.presetOp = v[0];
+      s_inbox.presetIndex = v[1];
+      memset(&s_inbox.preset, 0, sizeof(Preset));
+      memcpy(&s_inbox.preset, v.data() + 2, std::min<size_t>(v.size() - 2, sizeof(Preset)));
     }
     portEXIT_CRITICAL(&s_mux);
   }
@@ -51,7 +58,7 @@ class WriteCb : public NimBLECharacteristicCallbacks {
 static ServerCb s_serverCb;
 static WriteCb  s_writeCb;
 
-void begin(const AutoParams &initial) {
+void begin(const AutoParams &initial, const Presets &presets) {
   // "Baby Shaker XXXX" from the last two bytes of the factory MAC.
   const uint64_t mac = ESP.getEfuseMac();   // byte 0 of the MAC is the LSB here
   const uint8_t b4 = (mac >> 32) & 0xFF, b5 = (mac >> 40) & 0xFF;
@@ -72,10 +79,15 @@ void begin(const AutoParams &initial) {
   s_statusChr = svc->createCharacteristic(BLE_STATUS_UUID,
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic *cmd = svc->createCharacteristic(BLE_CMD_UUID, NIMBLE_PROPERTY::WRITE);
+  // Up to 1 + 8 * 44 bytes: clients fetch it with a long read.
+  s_presetsChr = svc->createCharacteristic(BLE_PRESETS_UUID,
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY,
+      1 + sizeof(Preset) * PRESET_MAX);
 
-  for (NimBLECharacteristic *c : {s_modeChr, pos, s_autoChr, cmd}) c->setCallbacks(&s_writeCb);
+  for (NimBLECharacteristic *c : {s_modeChr, pos, s_autoChr, cmd, s_presetsChr}) c->setCallbacks(&s_writeCb);
   s_modeChr->setValue((uint8_t)MODE_OFF);
   s_autoChr->setValue((const uint8_t *)&initial, sizeof(initial));
+  publishPresets(presets);
 
   // Name in the advertisement (the app filters on it), 128-bit service UUID
   // in the scan response - both won't fit in 31 bytes together.
@@ -100,7 +112,7 @@ bool takeInbox(Inbox &out) {
   out = s_inbox;
   s_inbox = Inbox{};
   portEXIT_CRITICAL(&s_mux);
-  return out.hasMode || out.hasPos || out.hasAuto || out.cmd != CMD_NONE;
+  return out.hasMode || out.hasPos || out.hasAuto || out.hasPresetOp || out.cmd != CMD_NONE;
 }
 
 void publishMode(uint8_t mode) {
@@ -113,6 +125,19 @@ void publishAuto(const AutoParams &p) { s_autoChr->setValue((const uint8_t *)&p,
 void publishStatus(const Status &s) {
   s_statusChr->setValue((const uint8_t *)&s, sizeof(s));
   if (s_connected) s_statusChr->notify();
+}
+
+}  // namespace ble
+
+namespace ble {
+
+// Wire format: u8 count, then count * Preset.
+void publishPresets(const Presets &p) {
+  uint8_t buf[1 + sizeof(Preset) * PRESET_MAX];
+  buf[0] = p.count;
+  memcpy(buf + 1, p.items, p.count * sizeof(Preset));
+  s_presetsChr->setValue(buf, 1 + p.count * sizeof(Preset));
+  if (s_connected) s_presetsChr->notify();
 }
 
 }  // namespace ble

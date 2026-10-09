@@ -24,6 +24,7 @@ static uint32_t   g_lastManualMs = 0;   // manual: last position command
 static bool       g_autoDirty = false;
 static uint32_t   g_autoDirtyMs = 0;
 static uint32_t   g_lastStatusMs = 0;
+static Presets    g_presets;
 
 static const char *modeName(Mode m) {
   return m == MODE_OFF ? "OFF" : m == MODE_MANUAL ? "MANUAL" : "AUTO";
@@ -92,6 +93,26 @@ static void setAuto(const AutoParams &p, uint32_t now) {
   g_autoDirtyMs = now;
 }
 
+static void presetOp(uint8_t op, uint8_t index, Preset p) {
+  Presets &ps = g_presets;
+  p.name[PRESET_NAME_LEN - 1] = 0;
+  if (op == PRESET_SAVE && p.name[0]) {
+    if (p.params.profile > PROFILE_CUBIC) p.params.profile = PROFILE_SINUSOIDAL;
+    if (index < ps.count) ps.items[index] = p;
+    else if (ps.count < PRESET_MAX) ps.items[ps.count++] = p;
+    else return;
+    Serial.printf("[preset] saved \"%s\"\n", p.name);
+  } else if (op == PRESET_DELETE && index < ps.count) {
+    Serial.printf("[preset] deleted \"%s\"\n", ps.items[index].name);
+    memmove(&ps.items[index], &ps.items[index + 1], (ps.count - index - 1) * sizeof(Preset));
+    ps.count--;
+  } else {
+    return;
+  }
+  settings::savePresets(ps);
+  ble::publishPresets(ps);
+}
+
 static void calibrate(uint32_t now) {
   Serial.println("[cal] sweeping 0 -> max ...");
   const PotCal c = servo::calibrate();
@@ -133,7 +154,15 @@ void setup() {
   settings::begin();
   g_auto = settings::loadAuto();
   servo::begin(settings::loadPotCal());
-  ble::begin(g_auto);
+  g_presets = settings::loadPresets();
+  if (g_presets.count == 0) {   // first boot with presets: keep the current settings as one
+    Preset p = {};
+    strlcpy(p.name, "Default", sizeof(p.name));
+    p.params = g_auto;
+    g_presets.items[g_presets.count++] = p;
+    settings::savePresets(g_presets);
+  }
+  ble::begin(g_auto, g_presets);
   Serial.printf("Baby Shaker V1 - %s\n", ble::deviceName());
 }
 
@@ -146,6 +175,7 @@ void loop() {
     if (in.hasAuto) setAuto(in.autoParams, now);
     if (in.hasMode) setMode((Mode)in.mode, now);
     if (in.hasPos) setManualPos(in.posDeg10 / 10.0f, now);
+    if (in.hasPresetOp) presetOp(in.presetOp, in.presetIndex, in.preset);
     if (in.cmd == ble::CMD_CALIBRATE) calibrate(now);
   }
   handleSerial(now);

@@ -39,3 +39,4 @@ constexpr uint32_t SETTINGS_SAVE_MS   = 3000;      // debounce NVS writes from s
 #define BLE_AUTO_UUID     "8f1d0004-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
 #define BLE_STATUS_UUID   "8f1d0005-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
 #define BLE_CMD_UUID      "8f1d0006-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
+#define BLE_PRESETS_UUID  "8f1d0007-5b7a-4c2e-9d3b-6a1f2e3c4b5a"

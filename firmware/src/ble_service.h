@@ -15,14 +15,18 @@ struct Inbox {
   bool       hasAuto = false;
   AutoParams autoParams{};
   uint8_t    cmd = CMD_NONE;
+  bool       hasPresetOp = false;
+  uint8_t    presetOp = 0, presetIndex = 0;
+  Preset     preset{};
 };
 
-void        begin(const AutoParams &initial);
+void        begin(const AutoParams &initial, const Presets &presets);
 const char *deviceName();
 bool        connected();
 bool        takeInbox(Inbox &out);   // true if anything arrived
 void        publishMode(uint8_t mode);
 void        publishAuto(const AutoParams &p);
 void        publishStatus(const Status &s);
+void        publishPresets(const Presets &p);
 
 }  // namespace ble
