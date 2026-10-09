@@ -1,0 +1,6 @@
+.pio/
+.vscode/
+*.log
+firmware/build.log
+firmware/build.err
+firmware/upload.log
