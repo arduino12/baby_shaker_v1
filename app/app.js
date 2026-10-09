@@ -31,6 +31,7 @@ const STR = {
     hintFail: 'Could not connect to {0}: {1}', hintLost: 'Connection lost. Tap Connect.',
     hintReconnect: 'Connection lost - reconnecting ({0}/6)…', hintModeFail: 'Mode change failed: {0}',
     hintSaveFail: 'Save failed: {0}',
+    hintStall: 'Motor stalled and was stopped. Check that nothing blocks the arm.',
     hintIos: 'Safari has no Bluetooth support. Open this page in the free "Bluefy" browser from the App Store.',
     hintNoBt: 'This browser has no Web Bluetooth. Use Chrome (Android / Windows / Mac) or Bluefy (iPhone).',
     credit: 'By Arad & Claud 2026 ©',
@@ -48,13 +49,14 @@ const STR = {
     noLimit: '0 (ללא הגבלה)', left: '(נותרו {0})', na: 'לא זמין',
     measured: 'נמדד', commanded: 'לפי פקודה (אין משוב)',
     scan: 'חפש מכשירים…',
-    hintPick: 'לחץ "התחברות" ובחר את ה-Baby Shaker שלך.', hintSelect: 'בחר מכשיר ולחץ "התחברות".',
-    hintUnreachable: '{0} לא זמין - ודא שהוא דולק ולחץ "התחברות".',
-    hintFail: 'החיבור ל-{0} נכשל: {1}', hintLost: 'החיבור נותק. לחץ "התחברות".',
+    hintPick: 'לחצו "התחברות" ובחרו את ה-Baby Shaker שלכם.', hintSelect: 'בחרו מכשיר ולחצו "התחברות".',
+    hintUnreachable: '{0} לא זמין - ודאו שהוא דולק ולחצו "התחברות".',
+    hintFail: 'החיבור ל-{0} נכשל: {1}', hintLost: 'החיבור נותק. לחצו "התחברות".',
     hintReconnect: 'החיבור נותק - מתחבר מחדש ({0}/6)…', hintModeFail: 'החלפת המצב נכשלה: {0}',
     hintSaveFail: 'השמירה נכשלה: {0}',
-    hintIos: 'ל-Safari אין תמיכה ב-Bluetooth. פתח את הדף בדפדפן החינמי "Bluefy" מה-App Store.',
-    hintNoBt: 'בדפדפן הזה אין Web Bluetooth. השתמש ב-Chrome (אנדרואיד / Windows / Mac) או ב-Bluefy (אייפון).',
+    hintIos: 'ל-Safari אין תמיכה ב-Bluetooth. פתחו את הדף בדפדפן החינמי "Bluefy" מה-App Store.',
+    hintNoBt: 'בדפדפן הזה אין Web Bluetooth. השתמשו ב-Chrome (אנדרואיד / Windows / Mac) או ב-Bluefy (אייפון).',
+    hintStall: 'המנוע נתקע ונעצר. ודאו ששום דבר לא חוסם את הזרוע.',
     credit: 'מאת ארד וקלוד 2026 ©',
   },
 };
@@ -192,6 +194,7 @@ function modeLabel(m, s) {
 
 function showMode(m, s) {
   const changed = m !== mode || (m === MODE_AUTO && s !== slot);
+  if (m === MODE_MANUAL && m !== mode) { posPending = null; draggingPos = false; }
   mode = m; slot = s;
   ui.stMode.textContent = modeLabel(m, s);
   ui.modeBtns.forEach(b => b.classList.toggle('active',
@@ -208,6 +211,9 @@ function onStatus(dv) {
   const m = dv.getUint8(0), fb = dv.getUint8(1) & 1, vbat = dv.getUint16(2, true);
   const pos = dv.getUint16(4, true) / 10, target = dv.getUint16(6, true) / 10, rem = dv.getUint16(8, true);
   const s = dv.byteLength > 10 ? dv.getUint8(10) : 0;
+  const stall = (dv.getUint8(1) & 2) !== 0;
+  if (stall && hint?.key !== 'hintStall') setHint('hintStall');
+  else if (!stall && hint?.key === 'hintStall') setHint(null);
   showMode(m, s);
   ui.stVbat.textContent = vbat < 500 ? t('na') : (vbat / 1000).toFixed(2) + ' V';
   ui.stPos.textContent = pos.toFixed(0) + '°' + (fb ? '' : '*');

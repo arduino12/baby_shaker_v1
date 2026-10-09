@@ -44,17 +44,14 @@ the choice is remembered per phone.
 |---|---|---|
 | 5 V rail sense | GPIO0 | 100k/100k divider |
 | Servo power switch | GPIO1 | Gate of a logic-level N-MOS switching servo GND; 100k gate pulldown |
-| Servo pot wiper | GPIO2 | **Through a divider** (e.g. 10k/10k) - the pot swings up to 5 V. GPIO2 is a strapping pin, see below |
-| Servo signal | GPIO3 | 50 Hz PWM |
+| Servo pot wiper | GPIO3 | **Through a divider** (e.g. 10k/10k) - the pot swings up to 5 V |
+| Servo signal | GPIO4 | 50 Hz PWM |
 | Status LED | GPIO8 | SuperMini's built-in blue LED, active low (`LED_ACTIVE_LOW`) |
 
 Pins, the servo pulse range (`SERVO_MIN_US`, `SERVO_MAX_US`) and the angle range
 (`SERVO_MAX_DEG`) are all in [firmware/src/config.h](firmware/src/config.h).
 
 Cautions:
-- GPIO2 is a boot strapping pin: it must not be pulled low while the chip resets or the C3 may
-  not boot. The servo is unpowered at reset (EN low), so the wiper floats through the divider -
-  keep the divider's bottom resistor large (≥ 10k) or add a weak pull-up if boots get flaky.
 - With the N-MOS in the servo's GND, the servo ground floats when it is off. The pot reading
   is only used while the servo is powered, and the firmware pulls the signal pin low *before*
   cutting power so it can't back-feed the servo.
@@ -77,9 +74,25 @@ Sinusoidal (cosine position), Cubical (3u²−2u³ position).
 
 Settings live in NVS and survive power loss.
 
-Pot feedback: run `cal` on the serial console (or write `1` to the command characteristic)
-with the pot wired - the servo sweeps 0 → max and stores the readings. Until calibrated,
-the reported position is the commanded one (shown with `*` in the app).
+### Pot calibration, stall detection
+
+Run `cal` on the serial console (or write `01` to the command characteristic - deliberately
+not in the app) with the servo free to move. It takes ~20 s:
+1. steps 0 → max in 11 points and records the pot voltage at each (piecewise-linear table),
+2. measures the pot noise while holding still,
+3. times a full-range move each way (10 % → 90 %) - the slower one is the servo's top speed.
+
+The result is stored in NVS (`calinfo` prints it) and enables:
+- **Real position**: status reports the measured angle (no `*` in the app).
+- **No jump on Manual/Auto entry**: the servo is powered with the signal idle (it stays limp),
+  the pot is read, and PWM starts at that angle - the app's slider moves to where the arm is.
+- **Speed cap**: Auto never plans faster than the measured top speed.
+- **Stall detection**: a reference "slow servo" (30 % of top speed) chases each target from the
+  arm's real progress. If the pot stays 20° further from the target than that reference for
+  1 s, the device switches Off and flags a stall; the app shows a warning. Thresholds:
+  `STALL_*` in config.h.
+
+Without a calibration the position shown is the commanded one (`*`) and stall detection is off.
 
 Build / flash (native USB, no buttons needed):
 ```
@@ -87,8 +100,8 @@ cd firmware
 pio run -t upload
 pio device monitor
 ```
-Serial commands: `off`, `man <deg>`, `auto [1-4]`, `set <profile> <speed> <accel> <travel> <hold×0.1s> <min>`,
-`save`, `cal`, `status`.
+Serial commands: `off`, `man` (enter Manual where the arm is), `man <deg>`, `auto [1-4]`,
+`set <profile> <speed> <accel> <travel> <hold×0.1s> <min>`, `save`, `cal`, `calinfo`, `status`.
 
 ### BLE protocol
 
@@ -99,7 +112,7 @@ Service `8f1d0001-5b7a-4c2e-9d3b-6a1f2e3c4b5a`, all little-endian:
 | Mode | `…0002` | R/W/N | u8: 0 Off, 1 Manual, 2 Auto; for Auto a 2nd byte picks the button 0-3 |
 | Position | `…0003` | W / W-no-rsp | u16 angle ×10 (switches to Manual) |
 | Auto params | `…0004` | R/W | active set (live, not saved): u8 profile, u8 0, u16 speed, u16 accel, u16 travel, u16 hold×10, u16 duration min |
-| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3 |
+| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback, bit1 = stopped by a stall), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3 |
 | Command | `…0006` | W | u8: 1 = calibrate pot, 2 = save the active set into the active Auto button |
 
 Device name: `Baby Shaker XXXX` - the last two bytes of the chip's MAC. The device keeps

@@ -7,7 +7,7 @@
 //            (Auto 1..4), each with its own parameter set in NVS. Slider
 //            edits apply live; CMD_SAVE_SLOT stores them into the active slot.
 //
-// Serial commands (115200): off | man <deg> | auto [1-4] | save | cal | status
+// Serial commands (115200): off | man <deg> | auto [1-4] | save | cal | calinfo | status
 //   set <profile> <speed> <accel> <travel> <hold x0.1s> <minutes>  (live; 'save' to keep)
 
 #include <Arduino.h>
@@ -28,9 +28,19 @@ static uint32_t   g_lastManualMs = 0;   // manual: last position command
 static uint32_t   g_lastStatusMs = 0;
 static AutoParams g_slots[SLOT_COUNT];
 static uint8_t    g_slot = 0;          // active Auto button
+static bool       g_stalled = false;   // last stop was a stall (cleared by the next mode change)
 
 static const char *modeName(Mode m) {
   return m == MODE_OFF ? "OFF" : m == MODE_MANUAL ? "MANUAL" : "AUTO";
+}
+
+// What the motion generator gets: speed capped at the servo's measured top
+// speed, so the profile never asks for more than the motor can do.
+static AutoParams motionParams() {
+  AutoParams p = g_auto;
+  const PotCal &cal = servo::calibration();
+  if (cal.valid && cal.maxSpeedDps && p.speed > cal.maxSpeedDps) p.speed = cal.maxSpeedDps;
+  return p;
 }
 
 static uint16_t remainingS(uint32_t now) {
@@ -47,7 +57,7 @@ static uint16_t remainingS(uint32_t now) {
 static void sendStatus(uint32_t now) {
   Status s;
   s.mode = g_mode;
-  s.flags = servo::feedbackValid() ? 1 : 0;
+  s.flags = (servo::feedbackValid() ? 1 : 0) | (g_stalled ? 2 : 0);
   s.vbatMv = servo::readVbatMv();
   s.posDeg10 = (uint16_t)(servo::read() * 10 + 0.5f);
   s.targetDeg10 = (uint16_t)(servo::commanded() * 10 + 0.5f);
@@ -65,20 +75,19 @@ static void setMode(Mode m, uint32_t now, uint8_t slot = ble::NO_SLOT) {
     settings::saveActiveSlot(slot);
     ble::publishAuto(g_auto);
   }
-  const float here = servo::read();
   g_mode = m;
   g_modeStartMs = now;
+  if (m != MODE_OFF) g_stalled = false;
   switch (m) {
     case MODE_OFF:
       servo::disable();
       break;
     case MODE_MANUAL:
       g_lastManualMs = now;
-      servo::enable(here);
+      servo::enableHere();   // holds where the arm is; the app's slider follows the status
       break;
     case MODE_AUTO:
-      servo::enable(here);
-      g_motion.start(here, g_auto, now);
+      g_motion.start(servo::enableHere(), motionParams(), now);
       break;
   }
   if (m == MODE_AUTO) Serial.printf("[mode] AUTO %u\n", g_slot + 1);
@@ -97,7 +106,7 @@ static void setAuto(const AutoParams &p, uint32_t now) {
   const bool durationChanged = p.durationMin != g_auto.durationMin;
   g_auto = p;
   if (g_auto.profile > PROFILE_CUBIC) g_auto.profile = PROFILE_SINUSOIDAL;
-  g_motion.setParams(g_auto);
+  g_motion.setParams(motionParams());
   if (durationChanged) g_modeStartMs = now;   // new duration counts from now
   ble::publishAuto(g_auto);
 }
@@ -109,11 +118,24 @@ static void saveSlot() {
 }
 
 static void calibrate(uint32_t now) {
-  Serial.println("[cal] sweeping 0 -> max ...");
+  Serial.println("[cal] sweeping 0 -> max, then timing full-range moves (~20 s) ...");
   const PotCal c = servo::calibrate();
-  Serial.printf("[cal] 0deg=%u mV  max=%u mV  -> %s\n", c.mvAt0, c.mvAtMax,
-                c.valid ? "OK, saved" : "FAILED (no pot swing), feedback disabled");
-  if (c.valid) settings::savePotCal(c);
+  if (c.valid) {
+    settings::savePotCal(c);
+    g_motion.setParams(motionParams());
+    Serial.printf("[cal] OK, saved: %u..%u mV, noise %u mV, top speed %u deg/s\n",
+                  c.mv[0], c.mv[CAL_POINTS - 1], c.noiseMv, c.maxSpeedDps);
+  } else {
+    Serial.println("[cal] FAILED: pot did not follow the PWM (not wired?) - old calibration kept");
+  }
+  sendStatus(now);
+}
+
+static void onStall(uint32_t now) {
+  Serial.printf("[stall] target %.1f deg, pot %.1f deg, reference %.1f deg - stopping\n",
+                servo::commanded(), servo::read(), servo::stallModel());
+  setMode(MODE_OFF, now);
+  g_stalled = true;
   sendStatus(now);
 }
 
@@ -127,7 +149,8 @@ static void handleSerial(uint32_t now) {
     }
     line.trim();
     if (line == "off") setMode(MODE_OFF, now);
-    else if (line.startsWith("man")) setManualPos(line.substring(3).toFloat(), now);
+    else if (line == "man") setMode(MODE_MANUAL, now);   // hold where the arm is
+    else if (line.startsWith("man ")) setManualPos(line.substring(4).toFloat(), now);
     else if (line.startsWith("auto")) {
       const int n = line.substring(4).toInt();
       setMode(MODE_AUTO, now, n >= 1 && n <= SLOT_COUNT ? n - 1 : g_slot);
@@ -148,7 +171,13 @@ static void handleSerial(uint32_t now) {
                     servo::feedbackValid(), ble::connected(), g_auto.profile, g_auto.speed,
                     g_auto.accel, g_auto.travel, g_auto.holdDs / 10.0f, g_auto.durationMin,
                     remainingS(now));
-    else if (line.length()) Serial.println("? off | man <deg> | auto [1-4] | set p v a t h d | save | cal | status");
+    else if (line == "calinfo") {
+      const PotCal &k = servo::calibration();
+      Serial.printf("cal valid=%u top speed=%u deg/s noise=%u mV table(mV):", k.valid, k.maxSpeedDps, k.noiseMv);
+      for (int i = 0; i < CAL_POINTS; i++) Serial.printf(" %u", k.mv[i]);
+      Serial.println();
+    }
+    else if (line.length()) Serial.println("? off | man <deg> | auto [1-4] | set p v a t h d | save | cal | calinfo | status");
     line = "";
   }
 }
@@ -192,7 +221,9 @@ void loop() {
 
   if (now - lastTick >= CONTROL_PERIOD_MS) {
     lastTick = now;
-    if (g_mode == MODE_MANUAL && now - g_lastManualMs >= MANUAL_TIMEOUT_MS) {
+    if (servo::enabled() && servo::stalled(now)) {
+      onStall(now);
+    } else if (g_mode == MODE_MANUAL && now - g_lastManualMs >= MANUAL_TIMEOUT_MS) {
       Serial.println("[mode] manual idle timeout");
       setMode(MODE_OFF, now);
     } else if (g_mode == MODE_AUTO) {

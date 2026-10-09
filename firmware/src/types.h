@@ -24,7 +24,7 @@ struct __attribute__((packed)) AutoParams {   // 12 bytes
 
 struct __attribute__((packed)) Status {       // 11 bytes
   uint8_t  mode;         // Mode
-  uint8_t  flags;        // bit0: pot feedback valid
+  uint8_t  flags;        // bit0: pot feedback valid, bit1: stopped because the motor stalled
   uint16_t vbatMv;
   uint16_t posDeg10;     // actual (or commanded) position, 0.1 deg
   uint16_t targetDeg10;  // commanded position, 0.1 deg
@@ -32,10 +32,15 @@ struct __attribute__((packed)) Status {       // 11 bytes
   uint8_t  slot;         // active auto slot, 0..3
 };
 
+// Pot feedback calibration: pot voltage at CAL_POINTS evenly spaced angles
+// (0..SERVO_MAX_DEG), plus what the sweep measured about the servo itself.
+constexpr uint8_t CAL_POINTS = 11;
 struct __attribute__((packed)) PotCal {
-  uint16_t mvAt0;        // ADC-pin mV at 0 deg
-  uint16_t mvAtMax;      // ADC-pin mV at SERVO_MAX_DEG
   uint8_t  valid;
+  uint8_t  reserved;
+  uint16_t mv[CAL_POINTS];   // ADC-pin mV at i * SERVO_MAX_DEG / (CAL_POINTS - 1)
+  uint16_t maxSpeedDps;      // slowest direction, 10%..90% of a full-range move
+  uint16_t noiseMv;          // peak-to-peak reading while holding still
 };
 
 constexpr AutoParams AUTO_DEFAULTS = {PROFILE_SINUSOIDAL, 0, 90, 300, 60, 5, 30};

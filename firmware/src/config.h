@@ -6,8 +6,8 @@
 // ESP32-C3: ADC1 is on GPIO0..4 only. Avoid strapping pins 2/8/9.
 constexpr int PIN_VBAT      = 0;   // USB 5 V rail, through VBAT_DIVIDER
 constexpr int PIN_SERVO_EN  = 1;   // N-MOS gate, switches servo GND (high = on)
-constexpr int PIN_SERVO_POS = 2;   // servo pot wiper, through POT_DIVIDER
-constexpr int PIN_SERVO_PWM = 3;   // servo signal
+constexpr int PIN_SERVO_POS = 3;   // servo pot wiper, through POT_DIVIDER
+constexpr int PIN_SERVO_PWM = 4;   // servo signal
 constexpr int PIN_LED       = 8;   // status LED (builtin) catode (low = on)
 constexpr bool LED_ACTIVE_LOW = true;
 
@@ -25,6 +25,14 @@ constexpr uint8_t  SERVO_PWM_BITS = 14;
 // so it needs a divider to stay under the C3's ~3.1 V ADC range.
 constexpr float POT_DIVIDER  = 2.0f;
 constexpr float VBAT_DIVIDER = 2.0f;   // 100k / 100k
+
+// ---------------------------------------------------------------- stall detection
+// Stalled = the pot is STALL_TOL_DEG further from the target than a servo
+// moving at STALL_SPEED_FRACTION of its calibrated top speed would be, for
+// STALL_TIME_MS in a row. Needs a valid pot calibration ("cal").
+constexpr float    STALL_TOL_DEG        = 20.0f;
+constexpr float    STALL_SPEED_FRACTION = 0.3f;   // loaded (stroller) and on a sagging supply it is slower
+constexpr uint32_t STALL_TIME_MS        = 1000;
 
 // ---------------------------------------------------------------- timing
 constexpr uint32_t CONTROL_PERIOD_MS  = 20;        // 50 Hz, same as the servo frame
