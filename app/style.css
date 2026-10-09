@@ -1,4 +1,5 @@
 :root {
+  --red: #e5534b;
   --bg: #0f1115;
   --card: #181b22;
   --line: #262a33;
@@ -33,15 +34,7 @@ header {
 h1 { font-size: 1.35rem; margin: 0; font-weight: 650; }
 .ver { color: var(--muted); font-weight: 500; }
 
-.header-end { display: flex; align-items: center; gap: 8px; }
 button.lang { min-height: 0; padding: 4px 10px; font-size: .8rem; font-weight: 500; border-radius: 999px; }
-
-.pill {
-  font-size: .8rem; padding: 4px 10px; border-radius: 999px;
-  background: var(--line); color: var(--muted);
-}
-.pill.on { background: rgba(76,195,138,.15); color: var(--ok); }
-.pill.busy { background: rgba(240,180,76,.15); color: var(--warn); }
 
 main { flex: 1; display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
 
@@ -59,7 +52,10 @@ button, select {
   min-height: 46px;
 }
 button { cursor: pointer; font-weight: 600; }
-#connectBtn { flex: 1; }
+#connectBtn { flex: 1; color: #0b1220; }
+#connectBtn.go { background: var(--ok); }
+#connectBtn.busy { background: var(--warn); opacity: 1; }
+#connectBtn.stop { background: var(--red); color: #fff; }
 button.primary { background: var(--accent); color: var(--accent-ink); }
 button:disabled { opacity: .5; cursor: default; }
 
@@ -71,7 +67,10 @@ button:disabled { opacity: .5; cursor: default; }
 .label { display: block; font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .value { font-size: 1.25rem; font-weight: 650; font-variant-numeric: tabular-nums; }
 
-.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.modes button { padding: 12px 2px; font-size: .9rem; white-space: nowrap; }
+.modes button.wide { font-size: 1rem; }
+.modes button.wide { grid-column: span 2; }
 .modes button.active { background: var(--accent); color: var(--accent-ink); }
 
 .slider, .field { display: flex; flex-direction: column; gap: 8px; }

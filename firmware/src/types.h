@@ -22,13 +22,14 @@ struct __attribute__((packed)) AutoParams {   // 12 bytes
   uint16_t durationMin;  // minutes, 0..120 (0 = no limit)
 };
 
-struct __attribute__((packed)) Status {       // 10 bytes
+struct __attribute__((packed)) Status {       // 11 bytes
   uint8_t  mode;         // Mode
   uint8_t  flags;        // bit0: pot feedback valid
   uint16_t vbatMv;
   uint16_t posDeg10;     // actual (or commanded) position, 0.1 deg
   uint16_t targetDeg10;  // commanded position, 0.1 deg
   uint16_t remainingS;   // auto: seconds until Off (0xFFFF = no limit); manual: until timeout
+  uint8_t  slot;         // active auto slot, 0..3
 };
 
 struct __attribute__((packed)) PotCal {
@@ -39,20 +40,11 @@ struct __attribute__((packed)) PotCal {
 
 constexpr AutoParams AUTO_DEFAULTS = {PROFILE_SINUSOIDAL, 0, 90, 300, 60, 5, 30};
 
-// Named auto-mode presets, kept on the device so every phone sees the same list.
-constexpr uint8_t PRESET_MAX      = 8;
-constexpr uint8_t PRESET_NAME_LEN = 32;   // UTF-8 bytes, zero-padded (~16 Hebrew letters)
-
-struct __attribute__((packed)) Preset {   // 44 bytes
-  char       name[PRESET_NAME_LEN];
-  AutoParams params;
+// Auto 1..4: each button has its own saved parameter set.
+constexpr uint8_t SLOT_COUNT = 4;
+constexpr AutoParams SLOT_DEFAULTS[SLOT_COUNT] = {
+  {PROFILE_SINUSOIDAL, 0, 60, 200, 40, 5, 30},    // gentle
+  {PROFILE_SINUSOIDAL, 0, 90, 300, 60, 5, 30},    // medium
+  {PROFILE_SCURVE, 0, 150, 500, 90, 3, 30},       // strong
+  {PROFILE_TRAPEZOIDAL, 0, 120, 400, 80, 10, 30},
 };
-
-struct Presets {
-  uint8_t count = 0;
-  Preset  items[PRESET_MAX];
-};
-
-// Write to the presets characteristic: op, index, then (save only) a Preset.
-enum PresetOp : uint8_t { PRESET_SAVE = 1, PRESET_DELETE = 2 };
-constexpr uint8_t PRESET_NEW = 0xFF;      // save index: append

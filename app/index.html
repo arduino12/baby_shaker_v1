@@ -16,17 +16,14 @@
 <body>
   <header>
     <h1>Baby Shaker <span class="ver">V1</span></h1>
-    <div class="header-end">
-      <button id="langBtn" class="lang" data-i18n="langBtn">עברית</button>
-      <span id="connState" class="pill">Disconnected</span>
-    </div>
+    <button id="langBtn" class="lang" data-i18n="langBtn">עברית</button>
   </header>
 
   <main>
     <section class="card" id="connectCard">
       <div class="row">
         <select id="deviceSelect" hidden></select>
-        <button id="connectBtn" class="primary">Connect</button>
+        <button id="connectBtn" class="go">Connect</button>
       </div>
       <p id="hint" class="hint"></p>
     </section>
@@ -39,9 +36,12 @@
         <div><span class="label" data-i18n="remaining">Remaining</span><span id="stRemain" class="value" dir="ltr">—</span></div>
       </div>
       <div class="modes" role="group" aria-label="Mode">
-        <button data-mode="0" data-i18n="off">Off</button>
-        <button data-mode="1" data-i18n="manual">Manual</button>
-        <button data-mode="2" data-i18n="auto">Auto</button>
+        <button class="wide" data-mode="0" data-i18n="off">Off</button>
+        <button class="wide" data-mode="1" data-i18n="manual">Manual</button>
+        <button data-mode="2" data-slot="0">Auto 1</button>
+        <button data-mode="2" data-slot="1">Auto 2</button>
+        <button data-mode="2" data-slot="2">Auto 3</button>
+        <button data-mode="2" data-slot="3">Auto 4</button>
       </div>
     </section>
 
@@ -54,14 +54,6 @@
     </section>
 
     <section class="card" id="autoCard" hidden>
-      <div class="field" id="presetRow">
-        <span data-i18n="preset">Preset:</span>
-        <div class="row">
-          <select id="presetSelect"></select>
-          <button id="presetSave" data-i18n="save">Save</button>
-          <button id="presetDel" data-i18n="del">Delete</button>
-        </div>
-      </div>
       <label class="field">
         <span data-i18n="profile">Movement Profile:</span>
         <select id="profile">
@@ -91,6 +83,7 @@
         <span><span data-i18n="duration">Duration (minutes):</span> <b id="durationVal"></b> <em id="durationRemain"></em></span>
         <input id="duration" type="range" min="0" max="120" step="1">
       </label>
+      <button id="saveBtn">Save</button>
     </section>
   </main>
 

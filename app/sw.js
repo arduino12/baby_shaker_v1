@@ -1,6 +1,6 @@
 // Network-first app-shell cache: updates arrive on the next load when online,
 // and the app still opens with no signal (e.g. on a walk).
-const CACHE = 'baby-shaker-v2';
+const CACHE = 'baby-shaker-v3';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', e => {

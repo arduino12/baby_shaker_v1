@@ -3,11 +3,11 @@
 #include "types.h"
 
 namespace settings {
-void begin();
-AutoParams loadAuto();
-void       saveAuto(const AutoParams &p);   // writes only if changed
-PotCal     loadPotCal();
-void       savePotCal(const PotCal &c);
-Presets    loadPresets();
-void       savePresets(const Presets &p);
+void    begin();
+void    loadSlots(AutoParams (&slots)[SLOT_COUNT]);
+void    saveSlots(const AutoParams (&slots)[SLOT_COUNT]);
+uint8_t loadActiveSlot();
+void    saveActiveSlot(uint8_t slot);   // writes only if changed
+PotCal  loadPotCal();
+void    savePotCal(const PotCal &c);
 }  // namespace settings

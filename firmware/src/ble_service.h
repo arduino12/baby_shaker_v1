@@ -5,28 +5,27 @@
 
 namespace ble {
 
-enum Cmd : uint8_t { CMD_NONE = 0, CMD_CALIBRATE = 1 };
+enum Cmd : uint8_t { CMD_NONE = 0, CMD_CALIBRATE = 1, CMD_SAVE_SLOT = 2 };
+constexpr uint8_t NO_SLOT = 0xFF;
 
 struct Inbox {
   bool       hasMode = false;
   uint8_t    mode = 0;
+  uint8_t    slot = NO_SLOT;   // with MODE_AUTO: which Auto button
   bool       hasPos = false;
   uint16_t   posDeg10 = 0;
   bool       hasAuto = false;
   AutoParams autoParams{};
   uint8_t    cmd = CMD_NONE;
-  bool       hasPresetOp = false;
-  uint8_t    presetOp = 0, presetIndex = 0;
-  Preset     preset{};
 };
 
-void        begin(const AutoParams &initial, const Presets &presets);
+void        begin(const AutoParams &initial);
+void        poll();                  // call from loop(): keeps advertising, drops stale links
 const char *deviceName();
 bool        connected();
 bool        takeInbox(Inbox &out);   // true if anything arrived
 void        publishMode(uint8_t mode);
 void        publishAuto(const AutoParams &p);
 void        publishStatus(const Status &s);
-void        publishPresets(const Presets &p);
 
 }  // namespace ble

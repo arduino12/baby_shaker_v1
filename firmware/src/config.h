@@ -4,11 +4,12 @@
 
 // ---------------------------------------------------------------- pins
 // ESP32-C3: ADC1 is on GPIO0..4 only. Avoid strapping pins 2/8/9.
-constexpr int PIN_SERVO_POS = 0;   // servo pot wiper, through POT_DIVIDER
-constexpr int PIN_VBAT      = 1;   // USB 5 V rail, through VBAT_DIVIDER
-constexpr int PIN_SERVO_PWM = 5;   // servo signal
-constexpr int PIN_SERVO_EN  = 6;   // N-MOS gate, switches servo GND (high = on)
-constexpr int PIN_LED       = 7;   // status LED anode (high = on)
+constexpr int PIN_VBAT      = 0;   // USB 5 V rail, through VBAT_DIVIDER
+constexpr int PIN_SERVO_EN  = 1;   // N-MOS gate, switches servo GND (high = on)
+constexpr int PIN_SERVO_POS = 2;   // servo pot wiper, through POT_DIVIDER
+constexpr int PIN_SERVO_PWM = 3;   // servo signal
+constexpr int PIN_LED       = 8;   // status LED (builtin) catode (low = on)
+constexpr bool LED_ACTIVE_LOW = true;
 
 // ---------------------------------------------------------------- servo
 // 0..SERVO_MAX_DEG maps linearly onto SERVO_MIN_US..SERVO_MAX_US.
@@ -29,7 +30,6 @@ constexpr float VBAT_DIVIDER = 2.0f;   // 100k / 100k
 constexpr uint32_t CONTROL_PERIOD_MS  = 20;        // 50 Hz, same as the servo frame
 constexpr uint32_t MANUAL_TIMEOUT_MS  = 60UL * 1000;
 constexpr uint32_t STATUS_PERIOD_MS   = 1000;
-constexpr uint32_t SETTINGS_SAVE_MS   = 3000;      // debounce NVS writes from slider drags
 
 // ---------------------------------------------------------------- BLE
 #define BLE_NAME_PREFIX   "Baby Shaker "
@@ -39,4 +39,3 @@ constexpr uint32_t SETTINGS_SAVE_MS   = 3000;      // debounce NVS writes from s
 #define BLE_AUTO_UUID     "8f1d0004-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
 #define BLE_STATUS_UUID   "8f1d0005-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
 #define BLE_CMD_UUID      "8f1d0006-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
-#define BLE_PRESETS_UUID  "8f1d0007-5b7a-4c2e-9d3b-6a1f2e3c4b5a"

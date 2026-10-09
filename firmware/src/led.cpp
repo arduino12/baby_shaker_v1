@@ -16,7 +16,7 @@ static uint32_t s_stepStart = 0;
 
 void begin() {
   pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, LOW);
+  digitalWrite(PIN_LED, LED_ACTIVE_LOW ? HIGH : LOW);
 }
 
 void update(uint32_t nowMs, bool bleConnected) {
@@ -31,7 +31,8 @@ void update(uint32_t nowMs, bool bleConnected) {
     s_stepStart += pat[s_step];
     s_step = (s_step + 1) % len;
   }
-  digitalWrite(PIN_LED, (s_step % 2 == 0) ? HIGH : LOW);
+  const bool on = s_step % 2 == 0;
+  digitalWrite(PIN_LED, on != LED_ACTIVE_LOW ? HIGH : LOW);
 }
 
 }  // namespace led

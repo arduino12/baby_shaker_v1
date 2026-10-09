@@ -29,27 +29,32 @@ Local test on a PC: `cd app && python -m http.server 8000` → open
 Connecting: the first time, tap **Connect** and pick "Baby Shaker XXXX" in the browser's
 chooser (browsers never connect without that one tap). After that, Chrome remembers the
 device and connects by itself when the page opens. If several shakers are remembered, a
-dropdown appears. One phone can be connected at a time.
+dropdown appears. The Connect button is also the status: green = Connect,
+orange = connecting, red = Disconnect.
 
-Auto mode has **presets**: named sets of auto settings stored on the device itself (up to 8),
-so every phone sees the same list. Pick one to apply it, *Save* stores the current sliders
-(same name = overwrite), *Delete* removes the selected one. The app speaks English and
-Hebrew (right-to-left); the choice is remembered per phone.
+**Auto 1-4**: four buttons, each with its own parameter set stored on the device (so every
+phone sees the same ones). Pressing one loads its set and starts moving. Slider changes
+apply live; **Save to Auto N** (bottom of the panel, highlighted when there are unsaved
+changes) stores them into that button. The app speaks English and Hebrew (right-to-left);
+the choice is remembered per phone.
 
 ## Wiring
 
 | Signal | C3 pin | Notes |
 |---|---|---|
-| Servo pot wiper | GPIO0 | **Through a divider** (e.g. 10k/10k) - the pot swings up to 5 V |
-| 5 V rail sense | GPIO1 | 100k/100k divider |
-| Servo signal | GPIO5 | 50 Hz PWM |
-| Servo power switch | GPIO6 | Gate of a logic-level N-MOS switching servo GND; 100k gate pulldown |
-| Status LED | GPIO7 | Anode, through ~330 Ω |
+| 5 V rail sense | GPIO0 | 100k/100k divider |
+| Servo power switch | GPIO1 | Gate of a logic-level N-MOS switching servo GND; 100k gate pulldown |
+| Servo pot wiper | GPIO2 | **Through a divider** (e.g. 10k/10k) - the pot swings up to 5 V. GPIO2 is a strapping pin, see below |
+| Servo signal | GPIO3 | 50 Hz PWM |
+| Status LED | GPIO8 | SuperMini's built-in blue LED, active low (`LED_ACTIVE_LOW`) |
 
 Pins, the servo pulse range (`SERVO_MIN_US`, `SERVO_MAX_US`) and the angle range
 (`SERVO_MAX_DEG`) are all in [firmware/src/config.h](firmware/src/config.h).
 
 Cautions:
+- GPIO2 is a boot strapping pin: it must not be pulled low while the chip resets or the C3 may
+  not boot. The servo is unpowered at reset (EN low), so the wiper floats through the divider -
+  keep the divider's bottom resistor large (≥ 10k) or add a weak pull-up if boots get flaky.
 - With the N-MOS in the servo's GND, the servo ground floats when it is off. The pot reading
   is only used while the servo is powered, and the firmware pulls the signal pin low *before*
   cutting power so it can't back-feed the servo.
@@ -82,7 +87,8 @@ cd firmware
 pio run -t upload
 pio device monitor
 ```
-Serial commands: `off`, `man <deg>`, `auto`, `cal`, `status`.
+Serial commands: `off`, `man <deg>`, `auto [1-4]`, `set <profile> <speed> <accel> <travel> <hold×0.1s> <min>`,
+`save`, `cal`, `status`.
 
 ### BLE protocol
 
@@ -90,11 +96,12 @@ Service `8f1d0001-5b7a-4c2e-9d3b-6a1f2e3c4b5a`, all little-endian:
 
 | Char | UUID suffix | Props | Payload |
 |---|---|---|---|
-| Mode | `…0002` | R/W/N | u8: 0 Off, 1 Manual, 2 Auto |
+| Mode | `…0002` | R/W/N | u8: 0 Off, 1 Manual, 2 Auto; for Auto a 2nd byte picks the button 0-3 |
 | Position | `…0003` | W / W-no-rsp | u16 angle ×10 (switches to Manual) |
-| Auto params | `…0004` | R/W | u8 profile, u8 0, u16 speed, u16 accel, u16 travel, u16 hold×10, u16 duration min |
-| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit) |
-| Command | `…0006` | W | u8: 1 = calibrate pot |
-| Presets | `…0007` | R/W/N | read: u8 count + count × (name[32] UTF-8 zero-padded, auto params[12]). write: `01 idx name[32] params[12]` save (idx 0xFF = append), `02 idx` delete |
+| Auto params | `…0004` | R/W | active set (live, not saved): u8 profile, u8 0, u16 speed, u16 accel, u16 travel, u16 hold×10, u16 duration min |
+| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3 |
+| Command | `…0006` | W | u8: 1 = calibrate pot, 2 = save the active set into the active Auto button |
 
-Device name: `Baby Shaker XXXX` - the last two bytes of the chip's MAC.
+Device name: `Baby Shaker XXXX` - the last two bytes of the chip's MAC. The device keeps
+advertising whenever one of its 3 link slots is free (NimBLE-Arduino 2.x does not restart
+advertising after a disconnect by itself).
