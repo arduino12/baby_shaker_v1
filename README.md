@@ -11,6 +11,8 @@ app/        Web Bluetooth PWA - plain HTML/JS, no build step
 
 ## The phone app
 
+**https://arduino12.github.io/baby_shaker_v1/** (Hebrew: add `?lang=he`, or use the language button)
+
 One web page, no app store, no Mac:
 
 | Phone | How |
@@ -18,8 +20,8 @@ One web page, no app store, no Mac:
 | Android | Open the app URL in **Chrome** → menu → *Add to Home screen* |
 | iPhone | Safari has no Bluetooth. Install the free **Bluefy** browser and open the URL there |
 
-The app must be served over HTTPS (or `localhost`). Free hosting: push this repo to
-GitHub → *Settings → Pages* → deploy from the `app/` folder (or a `gh-pages` branch).
+The app must be served over HTTPS (or `localhost`). Every push to `main` that touches
+`app/` redeploys it to GitHub Pages ([.github/workflows/pages.yml](.github/workflows/pages.yml)).
 
 Local test on a PC: `cd app && python -m http.server 8000` → open
 <http://localhost:8000> in Chrome or Edge.
@@ -27,7 +29,12 @@ Local test on a PC: `cd app && python -m http.server 8000` → open
 Connecting: the first time, tap **Connect** and pick "Baby Shaker XXXX" in the browser's
 chooser (browsers never connect without that one tap). After that, Chrome remembers the
 device and connects by itself when the page opens. If several shakers are remembered, a
-dropdown appears.
+dropdown appears. One phone can be connected at a time.
+
+Auto mode has **presets**: named sets of auto settings stored on the device itself (up to 8),
+so every phone sees the same list. Pick one to apply it, *Save* stores the current sliders
+(same name = overwrite), *Delete* removes the selected one. The app speaks English and
+Hebrew (right-to-left); the choice is remembered per phone.
 
 ## Wiring
 
@@ -88,5 +95,6 @@ Service `8f1d0001-5b7a-4c2e-9d3b-6a1f2e3c4b5a`, all little-endian:
 | Auto params | `…0004` | R/W | u8 profile, u8 0, u16 speed, u16 accel, u16 travel, u16 hold×10, u16 duration min |
 | Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit) |
 | Command | `…0006` | W | u8: 1 = calibrate pot |
+| Presets | `…0007` | R/W/N | read: u8 count + count × (name[32] UTF-8 zero-padded, auto params[12]). write: `01 idx name[32] params[12]` save (idx 0xFF = append), `02 idx` delete |
 
 Device name: `Baby Shaker XXXX` - the last two bytes of the chip's MAC.
