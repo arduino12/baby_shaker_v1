@@ -8,7 +8,7 @@
 namespace ble {
 
 static char                 s_name[24];
-static NimBLECharacteristic *s_modeChr, *s_autoChr, *s_statusChr;
+static NimBLECharacteristic *s_modeChr, *s_autoChr, *s_statusChr, *s_statsChr;
 static NimBLEServer         *s_server;
 static volatile bool        s_connected = false;
 static Inbox                s_inbox;
@@ -46,6 +46,8 @@ class WriteCb : public NimBLECharacteristicCallbacks {
       memcpy(&s_inbox.autoParams, v.data(), sizeof(AutoParams));
     } else if (uuid == NimBLEUUID(BLE_CMD_UUID) && v.size() >= 1) {
       s_inbox.cmd = v[0];
+      memset(s_inbox.cmdArgs, 0, sizeof(s_inbox.cmdArgs));
+      memcpy(s_inbox.cmdArgs, v.data() + 1, std::min<size_t>(v.size() - 1, sizeof(s_inbox.cmdArgs)));
     }
     portEXIT_CRITICAL(&s_mux);
   }
@@ -75,6 +77,7 @@ void begin(const AutoParams &initial) {
   s_statusChr = svc->createCharacteristic(BLE_STATUS_UUID,
       NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   NimBLECharacteristic *cmd = svc->createCharacteristic(BLE_CMD_UUID, NIMBLE_PROPERTY::WRITE);
+  s_statsChr = svc->createCharacteristic(BLE_STATS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
 
   for (NimBLECharacteristic *c : {s_modeChr, pos, s_autoChr, cmd}) c->setCallbacks(&s_writeCb);
   s_modeChr->setValue((uint8_t)MODE_OFF);
@@ -126,6 +129,11 @@ void publishMode(uint8_t mode) {
 }
 
 void publishAuto(const AutoParams &p) { s_autoChr->setValue((const uint8_t *)&p, sizeof(p)); }
+
+void publishStats(const stats::Summary &s) {
+  s_statsChr->setValue((const uint8_t *)&s, sizeof(s));
+  if (s_connected) s_statsChr->notify();
+}
 
 void publishStatus(const Status &s) {
   s_statusChr->setValue((const uint8_t *)&s, sizeof(s));

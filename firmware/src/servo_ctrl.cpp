@@ -64,32 +64,57 @@ static void startPwm(float deg) {
   ledcWrite(PIN_SERVO_PWM, usToDuty(degToUs(s_cmdDeg)));
 }
 
+// A reading inside the calibrated span (+5 %). Right after power-up, or with
+// the wiper disconnected, the pot reads junk - never steer by that.
+static bool plausibleMv(uint16_t mv) {
+  const int a = s_cal.mv[0], b = s_cal.mv[CAL_POINTS - 1];
+  const int lo = min(a, b), hi = max(a, b), margin = (hi - lo) / 20;
+  return mv >= lo - margin && mv <= hi + margin;
+}
+
+static bool measure(float &deg) {
+  if (!s_cal.valid) return false;
+  const uint16_t mv = readPotMv(16);
+  if (!plausibleMv(mv)) return false;
+  deg = mvToDeg(s_cal, mv);
+  return true;
+}
+
+void setLastKnown(float deg) { s_cmdDeg = clampDeg(deg); }
+
 float enableHere() {
+  float here;
   if (s_enabled) {
-    write(read());   // already powered: stop where it is now
-  } else if (s_cal.valid) {
-    digitalWrite(PIN_SERVO_EN, HIGH);   // signal stays low: no pulses, servo stays limp
-    delay(60);                          // pot and its divider settle
-    startPwm(mvToDeg(s_cal, readPotMv(16)));
+    if (measure(here)) write(here);   // already powered: stop where it is now
   } else {
-    startPwm(s_cmdDeg);   // PWM first, so the first powered frame has a pulse
+    // A valid pulse at the last known angle BEFORE power, so the servo never
+    // sees a powered frame without one (that is what made it jump / go to 0).
+    startPwm(s_cmdDeg);
+    delay(25);                                // >= one full 20 ms frame
     digitalWrite(PIN_SERVO_EN, HIGH);
+    s_enabled = true;
+    delay(SERVO_SETTLE_MS);                   // servo electronics + pot come up
+    if (measure(here)) write(here);           // arm was moved while off: hold it there
   }
-  s_enabled = true;
   s_modelDeg = read();
   s_modelMs = millis();
   s_stallSinceMs = 0;
   return s_cmdDeg;
 }
 
-void disable() {
+void disable(bool keepMeasured) {
   if (!s_enabled) return;
-  // Signal low before cutting GND, so the PWM pin can't back-power the servo
-  // electronics through its input while its ground floats.
+  float here;
+  if (keepMeasured && measure(here)) s_cmdDeg = here;   // next enable starts here
+  // Duty 0 takes effect at the next frame, so the pulse in flight finishes
+  // cleanly - no truncated (short = "go to 0") pulse. Then cut power, then
+  // drive the pin low so it can't back-feed the unpowered servo.
+  ledcWrite(PIN_SERVO_PWM, 0);
+  delay(25);
+  digitalWrite(PIN_SERVO_EN, LOW);
   ledcDetach(PIN_SERVO_PWM);
   pinMode(PIN_SERVO_PWM, OUTPUT);
   digitalWrite(PIN_SERVO_PWM, LOW);
-  digitalWrite(PIN_SERVO_EN, LOW);
   s_enabled = false;
 }
 
@@ -160,11 +185,7 @@ PotCal calibrate() {
   const float wasDeg = s_cmdDeg;
   PotCal cal = {};
 
-  if (!s_enabled) {
-    startPwm(0);
-    digitalWrite(PIN_SERVO_EN, HIGH);
-    s_enabled = true;
-  }
+  if (!s_enabled) enableHere();
   write(0);
   delay(2000);
 

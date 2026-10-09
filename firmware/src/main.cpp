@@ -19,6 +19,7 @@
 #include "motion.h"
 #include "servo_ctrl.h"
 #include "settings.h"
+#include "stats.h"
 
 static Mode       g_mode = MODE_OFF;
 static AutoParams g_auto;
@@ -29,6 +30,8 @@ static uint32_t   g_lastStatusMs = 0;
 static AutoParams g_slots[SLOT_COUNT];
 static uint8_t    g_slot = 0;          // active Auto button
 static bool       g_stalled = false;   // last stop was a stall (cleared by the next mode change)
+static bool       g_calibrating = false;
+static uint32_t   g_lastStatsMs = 0;
 
 static const char *modeName(Mode m) {
   return m == MODE_OFF ? "OFF" : m == MODE_MANUAL ? "MANUAL" : "AUTO";
@@ -57,7 +60,7 @@ static uint16_t remainingS(uint32_t now) {
 static void sendStatus(uint32_t now) {
   Status s;
   s.mode = g_mode;
-  s.flags = (servo::feedbackValid() ? 1 : 0) | (g_stalled ? 2 : 0);
+  s.flags = (servo::feedbackValid() ? 1 : 0) | (g_stalled ? 2 : 0) | (g_calibrating ? 4 : 0);
   s.vbatMv = servo::readVbatMv();
   s.posDeg10 = (uint16_t)(servo::read() * 10 + 0.5f);
   s.targetDeg10 = (uint16_t)(servo::commanded() * 10 + 0.5f);
@@ -67,7 +70,7 @@ static void sendStatus(uint32_t now) {
   g_lastStatusMs = now;
 }
 
-static void setMode(Mode m, uint32_t now, uint8_t slot = ble::NO_SLOT) {
+static void setMode(Mode m, uint32_t now, uint8_t slot = ble::NO_SLOT, bool stall = false) {
   if (m > MODE_AUTO) return;
   if (m == MODE_AUTO && slot < SLOT_COUNT) {   // pick a button: load its saved set
     g_slot = slot;
@@ -75,12 +78,16 @@ static void setMode(Mode m, uint32_t now, uint8_t slot = ble::NO_SLOT) {
     settings::saveActiveSlot(slot);
     ble::publishAuto(g_auto);
   }
+  const Mode prev = g_mode;
   g_mode = m;
   g_modeStartMs = now;
   if (m != MODE_OFF) g_stalled = false;
+  if (prev == MODE_OFF && m != MODE_OFF) stats::onStart();
   switch (m) {
     case MODE_OFF:
-      servo::disable();
+      servo::disable(!stall);   // after a stall the pot may be what failed: don't trust it
+      settings::saveLastPos(servo::commanded());
+      stats::flush();
       break;
     case MODE_MANUAL:
       g_lastManualMs = now;
@@ -118,6 +125,8 @@ static void saveSlot() {
 }
 
 static void calibrate(uint32_t now) {
+  g_calibrating = true;
+  sendStatus(now);   // the app shows "calibrating" - the loop is blocked for ~20 s
   Serial.println("[cal] sweeping 0 -> max, then timing full-range moves (~20 s) ...");
   const PotCal c = servo::calibrate();
   if (c.valid) {
@@ -128,13 +137,14 @@ static void calibrate(uint32_t now) {
   } else {
     Serial.println("[cal] FAILED: pot did not follow the PWM (not wired?) - old calibration kept");
   }
-  sendStatus(now);
+  g_calibrating = false;
+  sendStatus(millis());
 }
 
 static void onStall(uint32_t now) {
   Serial.printf("[stall] target %.1f deg, pot %.1f deg, reference %.1f deg - stopping\n",
                 servo::commanded(), servo::read(), servo::stallModel());
-  setMode(MODE_OFF, now);
+  setMode(MODE_OFF, now, ble::NO_SLOT, true);
   g_stalled = true;
   sendStatus(now);
 }
@@ -165,6 +175,14 @@ static void handleSerial(uint32_t now) {
       }
     }
     else if (line == "cal") calibrate(now);
+    else if (line == "stats") {
+      const stats::Summary s = stats::summary();
+      Serial.printf("stats (time %s): 24h %lu x / %lu s, 30d %lu x / %lu s, all %lu x / %lu s\n",
+                    stats::timeKnown() ? "synced" : "unknown", (unsigned long)s.dayCount, (unsigned long)s.daySec,
+                    (unsigned long)s.monthCount, (unsigned long)s.monthSec, (unsigned long)s.allCount, (unsigned long)s.allSec);
+    }
+    else if (line.startsWith("stats reset ")) stats::reset((stats::Which)line.substring(12).toInt());
+    else if (line.startsWith("time ")) stats::setTime(strtoul(line.c_str() + 5, nullptr, 10));
     else if (line == "status")
       Serial.printf("mode=%s slot=%u pos=%.1f cmd=%.1f vbat=%umV fb=%d ble=%d prof=%u v=%u a=%u trav=%u hold=%.1fs dur=%umin rem=%us\n",
                     modeName(g_mode), g_slot + 1, servo::read(), servo::commanded(), servo::readVbatMv(),
@@ -177,7 +195,7 @@ static void handleSerial(uint32_t now) {
       for (int i = 0; i < CAL_POINTS; i++) Serial.printf(" %u", k.mv[i]);
       Serial.println();
     }
-    else if (line.length()) Serial.println("? off | man <deg> | auto [1-4] | set p v a t h d | save | cal | calinfo | status");
+    else if (line.length()) Serial.println("? off | man [deg] | auto [1-4] | set p v a t h d | save | cal | calinfo | stats [reset 0-2] | time <epoch> | status");
     line = "";
   }
 }
@@ -201,6 +219,8 @@ void setup() {
   g_slot = settings::loadActiveSlot();
   g_auto = g_slots[g_slot];
   servo::begin(settings::loadPotCal());
+  servo::setLastKnown(settings::loadLastPos(SERVO_MAX_DEG / 2));
+  stats::begin();
   ble::begin(g_auto);
   Serial.printf("Baby Shaker V1 - %s\n", ble::deviceName());
 }
@@ -216,6 +236,9 @@ void loop() {
     if (in.hasPos) setManualPos(in.posDeg10 / 10.0f, now);
     if (in.cmd == ble::CMD_SAVE_SLOT) saveSlot();
     if (in.cmd == ble::CMD_CALIBRATE) calibrate(now);
+    if (in.cmd == ble::CMD_RESET_STATS) stats::reset((stats::Which)in.cmdArgs[0]);
+    if (in.cmd == ble::CMD_SET_TIME)
+      stats::setTime(in.cmdArgs[0] | in.cmdArgs[1] << 8 | in.cmdArgs[2] << 16 | (uint32_t)in.cmdArgs[3] << 24);
   }
   handleSerial(now);
 
@@ -238,6 +261,11 @@ void loop() {
 
   if (now - g_lastStatusMs >= STATUS_PERIOD_MS) sendStatus(now);
   ble::poll();
+  stats::tick(g_mode != MODE_OFF, now);
+  if (now - g_lastStatsMs >= 1000 && stats::changed()) {
+    ble::publishStats(stats::summary());
+    g_lastStatsMs = now;
+  }
   led::update(now, ble::connected());
 
   // Idle in FreeRTOS between ticks; the CPU waits in WFI there.

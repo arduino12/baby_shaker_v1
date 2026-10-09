@@ -18,12 +18,14 @@ class Motion {
   };
 
   void  beginStroke(float fromDeg, uint32_t nowMs);
+  float endpoint(bool high) const;
   static Segment plan(float from, float to, const AutoParams &p);
   static float   sample(const Segment &s, float t);
 
   AutoParams m_params{};
   Segment    m_seg;
   bool       m_holding = false;
+  bool       m_approach = false;   // first move from wherever the arm was: eased in
   bool       m_towardHigh = true;
   uint32_t   m_t0 = 0;
   float      m_pos = 0;

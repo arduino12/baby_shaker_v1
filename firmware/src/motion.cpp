@@ -4,19 +4,30 @@
 
 #include "config.h"
 
+float Motion::endpoint(bool high) const {
+  float travel = m_params.travel;
+  if (travel > SERVO_MAX_DEG) travel = SERVO_MAX_DEG;
+  const float mid = SERVO_MAX_DEG / 2;
+  return high ? mid + travel / 2 : mid - travel / 2;
+}
+
+// fromDeg is where the arm really is. The first move goes to the NEARER end
+// of the swing with speed/accel capped, so starting Auto never races.
 void Motion::start(float fromDeg, const AutoParams &p, uint32_t nowMs) {
   m_params = p;
   m_pos = fromDeg;
-  m_towardHigh = true;
+  m_towardHigh = fabsf(endpoint(true) - fromDeg) <= fabsf(endpoint(false) - fromDeg);
+  m_approach = true;
   beginStroke(fromDeg, nowMs);
 }
 
 void Motion::beginStroke(float fromDeg, uint32_t nowMs) {
-  float travel = m_params.travel;
-  if (travel > SERVO_MAX_DEG) travel = SERVO_MAX_DEG;
-  const float mid = SERVO_MAX_DEG / 2;
-  const float to = m_towardHigh ? mid + travel / 2 : mid - travel / 2;
-  m_seg = plan(fromDeg, to, m_params);
+  AutoParams p = m_params;
+  if (m_approach) {
+    if (p.speed > APPROACH_SPEED_DPS) p.speed = APPROACH_SPEED_DPS;
+    if (p.accel > APPROACH_ACCEL_DPS2) p.accel = APPROACH_ACCEL_DPS2;
+  }
+  m_seg = plan(fromDeg, endpoint(m_towardHigh), p);
   m_holding = false;
   m_t0 = nowMs;
 }
@@ -37,6 +48,7 @@ float Motion::update(uint32_t nowMs) {
       m_t0 = nowMs;
     }
   } else if (t >= m_params.holdDs / 10.0f) {
+    m_approach = false;
     m_towardHigh = !m_towardHigh;
     beginStroke(m_pos, nowMs);
   }

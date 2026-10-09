@@ -38,6 +38,14 @@ apply live; **Save to Auto N** (bottom of the panel, highlighted when there are 
 changes) stores them into that button. The app speaks English and Hebrew (right-to-left);
 the choice is remembered per phone.
 
+Long presses (with a confirmation):
+- **Position** box → calibrate the motor (see below).
+- A **Statistics** box (last 24 h / last 30 days / all time) → reset that one.
+
+Statistics count activations (Off → Manual/Auto) and run time. They live on the device; the app
+sends the phone's clock on connect because the device has none, so the 24 h / 30 day windows
+show "—" until a phone has connected since power-up (all-time always counts).
+
 ## Wiring
 
 | Signal | C3 pin | Notes |
@@ -84,15 +92,28 @@ not in the app) with the servo free to move. It takes ~20 s:
 
 The result is stored in NVS (`calinfo` prints it) and enables:
 - **Real position**: status reports the measured angle (no `*` in the app).
-- **No jump on Manual/Auto entry**: the servo is powered with the signal idle (it stays limp),
-  the pot is read, and PWM starts at that angle - the app's slider moves to where the arm is.
+- **No jump on Manual/Auto entry**: see "Switching the servo on and off" below - the app's
+  slider moves to where the arm is.
 - **Speed cap**: Auto never plans faster than the measured top speed.
 - **Stall detection**: a reference "slow servo" (30 % of top speed) chases each target from the
   arm's real progress. If the pot stays 20° further from the target than that reference for
   1 s, the device switches Off and flags a stall; the app shows a warning. Thresholds:
   `STALL_*` in config.h.
 
-Without a calibration the position shown is the commanded one (`*`) and stall detection is off.
+Without a calibration the position shown is the commanded one and stall detection is off.
+
+### Switching the servo on and off
+
+- **On**: a valid PWM pulse at the last known angle starts *before* the power switch closes, so
+  the servo never sees a powered frame without a pulse. After `SERVO_SETTLE_MS` (the servo
+  electronics also power the pot) a *plausible* pot reading (inside the calibrated span)
+  becomes the hold angle, in case the arm was moved while off.
+- **Off**: duty 0 takes effect at the next frame, so the pulse in flight finishes (a truncated
+  pulse reads as "go to 0°"); one frame later the power is cut and the pin driven low. The
+  measured angle is saved in NVS as the last known position (not after a stall - then the pot
+  may be what failed).
+- **Auto start**: the first move goes from the measured angle to the *nearer* end of the swing,
+  capped to `APPROACH_SPEED_DPS` / `APPROACH_ACCEL_DPS2`, then the normal profile runs.
 
 Build / flash (native USB, no buttons needed):
 ```
@@ -101,7 +122,8 @@ pio run -t upload
 pio device monitor
 ```
 Serial commands: `off`, `man` (enter Manual where the arm is), `man <deg>`, `auto [1-4]`,
-`set <profile> <speed> <accel> <travel> <hold×0.1s> <min>`, `save`, `cal`, `calinfo`, `status`.
+`set <profile> <speed> <accel> <travel> <hold×0.1s> <min>`, `save`, `cal`, `calinfo`,
+`stats`, `stats reset <0|1|2>`, `time <epoch>`, `status`.
 
 ### BLE protocol
 
@@ -112,8 +134,9 @@ Service `8f1d0001-5b7a-4c2e-9d3b-6a1f2e3c4b5a`, all little-endian:
 | Mode | `…0002` | R/W/N | u8: 0 Off, 1 Manual, 2 Auto; for Auto a 2nd byte picks the button 0-3 |
 | Position | `…0003` | W / W-no-rsp | u16 angle ×10 (switches to Manual) |
 | Auto params | `…0004` | R/W | active set (live, not saved): u8 profile, u8 0, u16 speed, u16 accel, u16 travel, u16 hold×10, u16 duration min |
-| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback, bit1 = stopped by a stall), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3 |
-| Command | `…0006` | W | u8: 1 = calibrate pot, 2 = save the active set into the active Auto button |
+| Status | `…0005` | R/N (1 Hz) | u8 mode, u8 flags (bit0 = pot feedback, bit1 = stopped by a stall, bit2 = calibrating), u16 Vbat mV, u16 pos×10, u16 target×10, u16 remaining s (0xFFFF = no limit), u8 active Auto button 0-3 |
+| Command | `…0006` | W | u8 command + args: `01` calibrate, `02` save the active set into the active Auto button, `03 w` reset stats (w: 0 = 24 h, 1 = 30 days, 2 = all time), `04 t0..t3` set time (u32 epoch s) |
+| Stats | `…0008` | R/N | 6 × u32: 24 h count, 24 h seconds, 30 d count, 30 d seconds, all-time count, all-time seconds (0xFFFFFFFF = time not known yet) |
 
 Device name: `Baby Shaker XXXX` - the last two bytes of the chip's MAC. The device keeps
 advertising whenever one of its 3 link slots is free (NimBLE-Arduino 2.x does not restart

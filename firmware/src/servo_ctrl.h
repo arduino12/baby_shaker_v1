@@ -6,12 +6,15 @@ namespace servo {
 
 void  begin(const PotCal &cal);
 
-// Power the servo and start holding where it physically is: with a valid pot
-// calibration it is powered with the signal idle (servo limp), the pot is
-// read, and PWM starts at that angle - so nothing jumps. Without calibration
-// it starts at the last commanded angle. Returns the start angle.
+// Power the servo without a jump: PWM at the last known angle first, then
+// power; once settled, a plausible pot reading becomes the hold angle (the
+// arm may have been moved while off). Returns the start angle.
 float enableHere();
-void  disable();                  // stop PWM, then cut servo GND
+// Stop pulses at a frame boundary, then cut servo GND. keepMeasured: remember
+// the pot angle as the last known position (skip it after a stall - the pot
+// may be the thing that failed).
+void  disable(bool keepMeasured = true);
+void  setLastKnown(float deg);    // restore the last known angle after boot
 bool  enabled();
 void  write(float deg);           // clamped to 0..SERVO_MAX_DEG
 float commanded();

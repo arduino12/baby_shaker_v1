@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include <Preferences.h>
+#include <math.h>
 #include <string.h>
 
 namespace settings {
@@ -57,5 +58,13 @@ PotCal loadPotCal() {
 }
 
 void savePotCal(const PotCal &c) { s_prefs.putBytes("potcal", &c, sizeof(c)); }
+
+// Where the arm was when the servo was last switched off: the first PWM pulse
+// after power-up goes there, so a reboot doesn't make the arm jump.
+float loadLastPos(float fallback) { return s_prefs.isKey("lastpos") ? s_prefs.getFloat("lastpos", fallback) : fallback; }
+
+void saveLastPos(float deg) {
+  if (fabsf(loadLastPos(-1000) - deg) > 0.5f) s_prefs.putFloat("lastpos", deg);
+}
 
 }  // namespace settings

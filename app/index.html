@@ -30,9 +30,8 @@
 
     <section class="card" id="statusCard" hidden>
       <div class="stats">
-        <div><span class="label" data-i18n="mode">Mode</span><span id="stMode" class="value">—</span></div>
         <div><span class="label" data-i18n="battery">Battery</span><span id="stVbat" class="value" dir="ltr">—</span></div>
-        <div><span class="label" data-i18n="position">Position</span><span id="stPos" class="value" dir="ltr">—</span></div>
+        <div id="posTile" class="pressable"><span class="label" data-i18n="position">Position</span><span id="stPos" class="value" dir="ltr">—</span></div>
         <div><span class="label" data-i18n="remaining">Remaining</span><span id="stRemain" class="value" dir="ltr">—</span></div>
       </div>
       <div class="modes" role="group" aria-label="Mode">
@@ -84,6 +83,16 @@
         <input id="duration" type="range" min="0" max="120" step="1">
       </label>
       <button id="saveBtn">Save</button>
+    </section>
+
+    <section class="card" id="usageCard" hidden>
+      <span class="card-title" data-i18n="usage">Statistics</span>
+      <div class="usage">
+        <div class="pressable" data-reset="0"><span class="label" data-i18n="last24h">Last 24 hours</span><span class="value" id="u0">—</span><span class="sub" id="u0t"></span></div>
+        <div class="pressable" data-reset="1"><span class="label" data-i18n="last30d">Last 30 days</span><span class="value" id="u1">—</span><span class="sub" id="u1t"></span></div>
+        <div class="pressable" data-reset="2"><span class="label" data-i18n="allTime">All time</span><span class="value" id="u2">—</span><span class="sub" id="u2t"></span></div>
+      </div>
+      <p class="hint" data-i18n="usageHint">Long-press a box to reset it.</p>
     </section>
   </main>
 

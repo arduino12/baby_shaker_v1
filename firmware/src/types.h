@@ -24,7 +24,7 @@ struct __attribute__((packed)) AutoParams {   // 12 bytes
 
 struct __attribute__((packed)) Status {       // 11 bytes
   uint8_t  mode;         // Mode
-  uint8_t  flags;        // bit0: pot feedback valid, bit1: stopped because the motor stalled
+  uint8_t  flags;        // bit0: pot feedback valid, bit1: stopped because the motor stalled, bit2: calibrating
   uint16_t vbatMv;
   uint16_t posDeg10;     // actual (or commanded) position, 0.1 deg
   uint16_t targetDeg10;  // commanded position, 0.1 deg

@@ -32,12 +32,21 @@ constexpr float VBAT_DIVIDER = 2.0f;   // 100k / 100k
 // STALL_TIME_MS in a row. Needs a valid pot calibration ("cal").
 constexpr float    STALL_TOL_DEG        = 20.0f;
 constexpr float    STALL_SPEED_FRACTION = 0.3f;   // loaded (stroller) and on a sagging supply it is slower
-constexpr uint32_t STALL_TIME_MS        = 1000;
+constexpr uint32_t STALL_TIME_MS        = 500;
+
+// ---------------------------------------------------------------- power-up / approach
+// Enabling: PWM at the last known angle, then power, then wait this long for
+// the servo electronics (which also power the pot) before trusting the pot.
+constexpr uint32_t SERVO_SETTLE_MS     = 150;
+// Auto's first move, from wherever the arm is to the first end of the swing,
+// is capped to these so it eases in instead of racing.
+constexpr uint16_t APPROACH_SPEED_DPS  = 40;
+constexpr uint16_t APPROACH_ACCEL_DPS2 = 80;
 
 // ---------------------------------------------------------------- timing
 constexpr uint32_t CONTROL_PERIOD_MS  = 20;        // 50 Hz, same as the servo frame
 constexpr uint32_t MANUAL_TIMEOUT_MS  = 60UL * 1000;
-constexpr uint32_t STATUS_PERIOD_MS   = 1000;
+constexpr uint32_t STATUS_PERIOD_MS   = 500;
 
 // ---------------------------------------------------------------- BLE
 #define BLE_NAME_PREFIX   "Baby Shaker "
@@ -47,3 +56,4 @@ constexpr uint32_t STATUS_PERIOD_MS   = 1000;
 #define BLE_AUTO_UUID     "8f1d0004-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
 #define BLE_STATUS_UUID   "8f1d0005-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
 #define BLE_CMD_UUID      "8f1d0006-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
+#define BLE_STATS_UUID    "8f1d0008-5b7a-4c2e-9d3b-6a1f2e3c4b5a"
